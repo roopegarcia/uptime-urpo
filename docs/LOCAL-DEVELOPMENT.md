@@ -1,0 +1,93 @@
+# Local development prerequisites
+
+This guide records Milestone 0 setup on an Apple Silicon Mac. For the current application, build/test/run commands are in [the M1 guide](MILESTONE-1.md). Run commands from the repository root unless stated otherwise.
+
+## .NET SDK
+
+The repository selects SDK **10.0.402** in `global.json`, with `latestPatch` roll-forward within its feature band and prereleases disabled. This SDK includes .NET / ASP.NET Core **10.0.13**. Future SDK servicing updates are deliberate maintenance work; pinning does not update an installation automatically.
+
+The SDK is installed in `~/.dotnet`, outside Git. To use `dotnet` directly in the current terminal:
+
+```sh
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+dotnet --info
+dotnet --version
+dotnet --list-runtimes
+```
+
+These exports affect only the current shell. No shell startup file was changed by M0. If you want persistent setup, add those two export lines to your own zsh profile, then open a new terminal. The repository's prerequisite script also recognizes `~/.dotnet/dotnet` without a PATH change.
+
+For a fresh Apple Silicon Mac without .NET, Microsoft's installer can reproduce the selected SDK installation:
+
+```sh
+curl --fail --location --output /tmp/uptime-urpo-dotnet-install.sh https://dot.net/v1/dotnet-install.sh
+# Inspect the downloaded official installer before executing it.
+bash /tmp/uptime-urpo-dotnet-install.sh --version 10.0.402 --architecture arm64 --install-dir "$HOME/.dotnet"
+```
+
+M0 installation used the official ARM64 SDK archive and verified its SHA-512 against [Microsoft's release metadata](https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json) before extraction. For this exact artifact:
+
+```text
+URL: https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.402/dotnet-sdk-10.0.402-osx-arm64.tar.gz
+SHA-512: ee0d379c144ebddef6efe851e1514883d1b695430d13b3fb13e8153f8476e1e5ac7abc42c08668471aaf4d738ff367cf53009845f94d224ba126febe74d00b75
+```
+
+Install an SDK, not only the runtime: the SDK supplies the compiler, templates, build tooling, and test commands. C# 14 ships with the .NET 10 SDK; no separate C# compiler installation is needed. On another platform, choose its native architecture through the [official .NET downloads](https://dotnet.microsoft.com/en-us/download/dotnet/10.0), rather than reusing the macOS archive.
+
+## Docker
+
+Docker Desktop supplies the Linux container engine on this Mac. The CLI alone is not enough: the engine must be running.
+
+```sh
+open -a Docker
+docker --version
+docker compose version
+docker info --format '{{.OSType}} {{.Architecture}}'
+```
+
+Wait for Docker Desktop to finish starting before retrying `docker info`. M0 starts Docker Desktop and checks engine availability; it does not start a project database, pull an image, run a container, or change existing Compose services. Database containers arrive in M3.
+
+Disposable database integration tests will require a reachable Docker engine in M3. A macOS ARM64 engine is not evidence of Intel NUC compatibility; production image/runtime verification belongs to M6.
+
+## Node, editor, Git
+
+Node and npm are already available. No frontend installation is required until M5. At that point select and pin a supported Node release together with compatible React/Vite packages and a lockfile; do not assume today's Node version is the eventual project pin.
+
+VS Code with Microsoft's C# tooling is optional. The CLI is the reproducible baseline. Git is already initialized; no remote, commit, or publication is created by M0.
+
+## Local configuration and secrets
+
+Future real targets belong in private local configuration, not committed settings. The ignore file excludes local environment files and local/development JSON settings. Sanitized examples may be committed later. An ignore rule is not a security boundary: inspect staged changes before every commit.
+
+M1 now explicitly loads `appsettings.Local.json` and reapplies environment/CLI configuration afterward. .NET does not automatically load arbitrary `appsettings.Local.json` files. See [the implemented configuration precedence](MILESTONE-1.md#configure-one-owned-target). User Secrets are a possible alternative local source; this project currently uses the ignored local JSON file.
+
+No credentials, private target list, connection strings, or NUC host details are required for M0. PostgreSQL and frontend tooling are intentionally deferred.
+
+## Verification
+
+```sh
+sh -n scripts/check-prerequisites.sh
+sh scripts/check-prerequisites.sh
+git diff --check
+```
+
+The prerequisite script changes no services or project files. It exits nonzero if the selected SDK, Docker Compose, or Docker engine is unavailable. Node/npm are reported as optional until M5. SDK execution can create normal .NET user-level first-run/cache files.
+
+The commands above check prerequisites and shell syntax only. Application tests were added in M1 and are documented separately. Do not substitute a successful prerequisite check for application, production, or device verification. Docker can remain stopped for M1; the prerequisite checker still reports its absence because it checks the full M0 environment.
+
+## Milestone 0 verification record — 2026-10-25
+
+Initial inspection: empty Git repository on `main`, no remote, no applicable `AGENTS.md`, no available .NET SDK, installed Docker tooling with engine stopped, and installed Node/npm.
+
+Verified after setup:
+
+- SDK archive SHA-512 matched Microsoft's published metadata before extraction.
+- `~/.dotnet/dotnet --info`: SDK 10.0.402, host 10.0.13, RID `osx-arm64`, ARM64 host architecture, repository `global.json` selected.
+- Installed runtimes: `Microsoft.NETCore.App` 10.0.13 and `Microsoft.AspNetCore.App` 10.0.13.
+- `sh scripts/check-prerequisites.sh`: PASS; Docker 29.9.2, Compose v5.6.1, reachable Linux/aarch64 engine, Node v26.9.0, npm 12.2.0.
+- Shell syntax check, SDK JSON parsing, local Markdown links, and whitespace checks passed. No `.cs` or `.csproj` files exist.
+
+At the end of M0, no application tests, production checks, or physical-device checks had been performed because those artifacts did not exist. No project containers were created. No commit, remote publication, or NUC operation occurred. The user-local SDK was installed and Docker Desktop was running at that point; shell profile files were not edited. These are historical observations, not a claim about the engine's current state.
+
+Milestone 0 was completed before M1 approval. The current milestone status is in [the roadmap](ROADMAP.md); the verification record above remains historical.

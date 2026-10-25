@@ -1,0 +1,30 @@
+# .NET and frontend build output
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/coverage/
+**/TestResults/
+
+# Local configuration and secrets: only sanitized examples belong in Git.
+.env
+.env.*
+!.env.example
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+**/appsettings.Development.json
+**/secrets.json
+**/*.pfx
+**/*.p12
+**/*.key
+
+# Local databases, backups and tool state
+.local/
+backups/
+*.dump
+*.sql.gz
+.vs/
+.idea/
+.DS_Store
+*.user
+*.suo

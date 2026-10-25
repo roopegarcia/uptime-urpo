@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/backend/">
+    <Project Path="backend/UptimeUrpo.Api/UptimeUrpo.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/UptimeUrpo.IntegrationTests/UptimeUrpo.IntegrationTests.csproj" />
+    <Project Path="tests/UptimeUrpo.UnitTests/UptimeUrpo.UnitTests.csproj" />
+  </Folder>
+</Solution>
