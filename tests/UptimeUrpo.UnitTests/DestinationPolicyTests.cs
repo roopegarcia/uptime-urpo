@@ -143,10 +143,27 @@ public sealed class DestinationPolicyTests
     {
         public IPAddress[] Addresses { get; set; } = [IPAddress.Parse("1.1.1.1")];
         public int Calls { get; private set; }
+        public List<string> Hosts { get; } = [];
         public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken)
         {
             Calls++;
+            Hosts.Add(host);
             return Task.FromResult(Addresses);
         }
+    }
+
+    [Fact]
+    public async Task MultipleApprovedHostsEachResolveTheirOwnDestination()
+    {
+        var resolver = new StubResolver();
+        var targets = new[] { new TargetOptions(), new TargetOptions { Id = "second", Url = "https://example.org/" } };
+        var connector = new PublicHttpsConnector(targets, resolver, (_, _) =>
+            ValueTask.FromResult<Stream>(new MemoryStream()));
+        using var first = await connector.ConnectAsync(new DnsEndPoint("example.com", 443), CancellationToken.None);
+        using var second = await connector.ConnectAsync(new DnsEndPoint("example.org", 443), CancellationToken.None);
+        Assert.Equal(new[] { "example.com", "example.org" }, resolver.Hosts);
+        resolver.Addresses = [IPAddress.Loopback];
+        await Assert.ThrowsAsync<BlockedDestinationException>(async () =>
+            await connector.ConnectAsync(new DnsEndPoint("example.org", 443), CancellationToken.None));
     }
 }

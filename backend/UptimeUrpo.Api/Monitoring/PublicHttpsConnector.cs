@@ -11,18 +11,23 @@ public sealed class BlockedDestinationException : Exception
 
 public sealed class PublicHttpsConnector
 {
-    private readonly string _approvedHost;
+    private readonly HashSet<string> _approvedHosts;
     private readonly IDnsResolver _resolver;
     private readonly Func<IPEndPoint, CancellationToken, ValueTask<Stream>> _connect;
 
-    public PublicHttpsConnector(IOptions<TargetOptions> options, IDnsResolver resolver)
-        : this(options.Value, resolver, ConnectSocketAsync) { }
+    public PublicHttpsConnector(IOptions<MonitoringOptions> options, IDnsResolver resolver)
+        : this(options.Value.GetTargets(), resolver, ConnectSocketAsync) { }
 
     // A narrow test seam verifies address pinning without opening a real socket.
     internal PublicHttpsConnector(TargetOptions target, IDnsResolver resolver,
         Func<IPEndPoint, CancellationToken, ValueTask<Stream>> connect)
+        : this([target], resolver, connect) { }
+
+    internal PublicHttpsConnector(IEnumerable<TargetOptions> targets, IDnsResolver resolver,
+        Func<IPEndPoint, CancellationToken, ValueTask<Stream>> connect)
     {
-        _approvedHost = new Uri(target.Url).IdnHost;
+        _approvedHosts = targets.Select(target => new Uri(target.Url).IdnHost)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _resolver = resolver;
         _connect = connect;
     }
@@ -43,13 +48,12 @@ public sealed class PublicHttpsConnector
     internal async ValueTask<Stream> ConnectAsync(DnsEndPoint destination, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (destination.Port != 443 ||
-            !string.Equals(destination.Host, _approvedHost, StringComparison.OrdinalIgnoreCase))
+        if (destination.Port != 443 || !_approvedHosts.Contains(destination.Host))
         {
             throw new BlockedDestinationException();
         }
 
-        var addresses = await _resolver.ResolveAsync(_approvedHost, cancellationToken);
+        var addresses = await _resolver.ResolveAsync(destination.Host, cancellationToken);
         // Reject mixed public/private answers before connecting to any address.
         if (addresses.Length == 0 || addresses.Any(address => !PublicAddressPolicy.IsPublic(address)))
         {

@@ -1,6 +1,6 @@
 # Architecture and decisions
 
-Status: accepted design direction for incremental implementation. M0 and M1 are complete. M1 implements one startup check, in-memory state, `/health`, a saved-result endpoint, and the outbound security boundary. Scheduled monitoring and all persistence/dashboard/deployment behavior below remain **planned**. See [the exact M1 interface and evidence](MILESTONE-1.md).
+Status: accepted design direction for incremental implementation. M0–M2 are complete. The current application implements recurring multi-target checks, bounded concurrency, in-memory health/freshness, safe list/detail snapshots, `/health`, and the outbound security boundary. Persistence, incidents, uptime statistics, dashboard, and deployment remain **planned**. See [the current M2 interface and evidence](MILESTONE-2.md).
 
 ## System shape
 
@@ -61,13 +61,13 @@ The scheduler uses cancellation-aware asynchronous work, bounded concurrency, an
 
 Use `IHttpClientFactory` for managed HTTP clients. A worker is long-lived; each concurrent database operation must use a separate service scope and `DbContext`. Never share a context between parallel checks. Inject time and HTTP boundaries where they make deterministic tests possible, rather than introducing broad abstractions.
 
-Milestone 1 performs one approved startup check and serves its saved result. Reads must not trigger more target requests. Milestone 2 adds scheduling with in-memory results. Milestone 3 makes results durable.
+M1 originally performed one startup check. M2 now uses one sequential async loop per enabled target with a shared semaphore, and a fixed delay after each attempt completes. The first check is due immediately; startup no longer waits for its response. No missed-run queue exists. Timeouts must be shorter than intervals; interval defaults to 60 seconds and concurrency to three. The single-target M1 configuration is supported alongside a new target list, but conflicting shapes are rejected. Reads never trigger target requests. M3 will make results durable.
 
 ## Health and incidents
 
 Health evaluates freshness first:
 
-- **UNKNOWN:** disabled, no completed check, or the latest check is older than twice the configured interval.
+- **UNKNOWN:** disabled, no completed check, or the latest completed observation is older than twice the configured interval, measured using monotonic elapsed time. This takes precedence over historical failure state.
 - **UP:** fresh expected response at or below the latency threshold.
 - **DEGRADED:** fresh expected response above the latency threshold, or a fresh failed response below the consecutive-failure threshold.
 - **DOWN:** fresh failures reaching the configured consecutive-failure threshold.
@@ -138,6 +138,8 @@ Self-monitoring on the NUC cannot independently detect NUC power/network loss or
 
 ## Version and design references
 
+M2 adds Microsoft.Extensions.TimeProvider.Testing 10.11.0 to test projects only. `TimeProvider` now controls request deadlines, elapsed duration, scheduling delays, and freshness. The production clock remains `TimeProvider.System`; no runtime scheduling library was added.
+
 M1 resolved xUnit 2.9.3, its VSTest runner 4.0.1, Microsoft.NET.Test.Sdk 18.11.0, and Microsoft.AspNetCore.Mvc.Testing 10.0.13 from NuGet. The runner declares support for xUnit v2 and .NET 8 or later. Restore/build/test verified compatibility with the pinned .NET 10 SDK; project lockfiles record transitive versions. The API itself adds no third-party runtime package. OpenAPI tooling is deferred to M4.
 
 Version families were reviewed on 2026-10-25. Resolve exact compatible stable package patches when each dependency is introduced; commit lockfiles and deliberate SDK updates.
@@ -153,3 +155,5 @@ Version families were reviewed on 2026-10-25. Resolve exact compatible stable pa
 - [ASP.NET Core API integration tests](https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests?view=aspnetcore-10.0)
 - [IANA IPv4 special-purpose registry](https://www.iana.org/assignments/iana-ipv4-special-registry/)
 - [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+- [.NET 10 background-service startup behavior](https://learn.microsoft.com/en-us/dotnet/core/compatibility/extensions/10.0/backgroundservice-executeasync-task)
+- [Time-provider-aware delays](https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.delay?view=net-10.0)

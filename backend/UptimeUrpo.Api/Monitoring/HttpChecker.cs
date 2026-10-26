@@ -1,38 +1,34 @@
-using System.Diagnostics;
-using Microsoft.Extensions.Options;
-
 namespace UptimeUrpo.Api.Monitoring;
 
 public sealed class HttpChecker
 {
     public const string ClientName = "monitoring";
     private readonly IHttpClientFactory _clients;
-    private readonly TargetOptions _target;
     private readonly TimeProvider _time;
 
-    public HttpChecker(IHttpClientFactory clients, IOptions<TargetOptions> options, TimeProvider time)
+    public HttpChecker(IHttpClientFactory clients, TimeProvider time)
     {
         _clients = clients;
-        _target = options.Value;
         _time = time;
     }
 
-    public async Task<CheckResult> CheckAsync(CancellationToken cancellationToken)
+    public async Task<CheckResult> CheckAsync(TargetOptions target, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var checkedAt = _time.GetUtcNow();
-        var stopwatch = Stopwatch.StartNew();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(_target.TimeoutSeconds));
+        var started = _time.GetTimestamp();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(target.TimeoutSeconds), _time);
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
         try
         {
             using var client = _clients.CreateClient(ClientName);
-            using var request = new HttpRequestMessage(HttpMethod.Get, _target.Url);
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            using var request = new HttpRequestMessage(HttpMethod.Get, target.Url);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestCancellation.Token);
+            cancellationToken.ThrowIfCancellationRequested();
             var status = (int)response.StatusCode;
-            var success = status == _target.ExpectedStatusCode;
-            return new CheckResult(checkedAt, stopwatch.Elapsed.TotalMilliseconds, status,
+            var success = status == target.ExpectedStatusCode;
+            return new CheckResult(checkedAt, _time.GetElapsedTime(started).TotalMilliseconds, status,
                 success, success ? null : FailureCategory.UnexpectedStatus);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -42,11 +38,12 @@ public sealed class HttpChecker
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
-            return new CheckResult(checkedAt, stopwatch.Elapsed.TotalMilliseconds, null, false, FailureCategory.Timeout);
+            return new CheckResult(checkedAt, _time.GetElapsedTime(started).TotalMilliseconds, null, false, FailureCategory.Timeout);
         }
         catch (HttpRequestException exception)
         {
-            return new CheckResult(checkedAt, stopwatch.Elapsed.TotalMilliseconds, null, false, Classify(exception));
+            cancellationToken.ThrowIfCancellationRequested();
+            return new CheckResult(checkedAt, _time.GetElapsedTime(started).TotalMilliseconds, null, false, Classify(exception));
         }
     }
 

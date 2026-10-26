@@ -103,6 +103,8 @@ M0 had no application tests. M1 now has tests; follow the commands in [the M1 gu
 
 ## Milestone 1 — Follow the real code
 
+This section introduces the concepts learned in M1. M2 has since changed the hosting/state classes and checker signature; the notes below point out those changes so links still lead to the current implementation.
+
 ### Entry point, namespaces, and project files
 
 Start with [Program.cs](backend/UptimeUrpo.Api/Program.cs). Its top-level statements are the executable entry point; the compiler supplies the surrounding `Main` method. C# files elsewhere use `namespace UptimeUrpo.Api.Monitoring;` to organize type names. A `using UptimeUrpo.Api.Monitoring;` directive makes those names available without repeating the full namespace. This resembles importing names in TypeScript, though a C# `using` directive does not execute a JavaScript module.
@@ -111,7 +113,7 @@ The `.csproj` file declares the target framework (`net10.0`), nullable-reference
 
 ### Configuration becomes a typed object
 
-[TargetOptions](backend/UptimeUrpo.Api/Monitoring/TargetOptions.cs) is a class with properties. For example, `public int TimeoutSeconds { get; set; } = 10;` declares an integer property, permits reading/writing, and supplies a default. The configuration binder fills these properties from `Monitoring:Target`.
+[TargetOptions](backend/UptimeUrpo.Api/Monitoring/TargetOptions.cs) is a class with properties. For example, `public int TimeoutSeconds { get; set; } = 10;` declares an integer property, permits reading/writing, and supplies a default. M1 bound one object from `Monitoring:Target`; M2 binds a `MonitoringOptions` root containing targets, while still accepting the legacy object.
 
 `IOptions<TargetOptions>` is a generic interface: the type argument says which settings it carries. The application validates the bound object before startup. C# static types cannot establish that an operator-supplied URL is safe, so runtime validation is still necessary, just as TypeScript types do not validate incoming JSON.
 
@@ -136,15 +138,15 @@ The API's JSON configuration serializes the failure enum as strings such as `une
 
 ### Constructor injection is visible object construction
 
-Read [HttpChecker's constructor](backend/UptimeUrpo.Api/Monitoring/HttpChecker.cs). It requires `IHttpClientFactory`, `IOptions<TargetOptions>`, and `TimeProvider`. The framework supplies these because `Program.cs` registers them.
+Read [HttpChecker's constructor](backend/UptimeUrpo.Api/Monitoring/HttpChecker.cs). It now requires `IHttpClientFactory` and `TimeProvider`. M1 also injected the one target's options; M2 instead passes a target to each check. The framework supplies constructor dependencies because `Program.cs` registers them.
 
-`AddSingleton<StartupCheckState>()` creates one state object for the host. `AddTransient<HttpChecker>()` creates a checker whenever resolved. The one-shot startup hook receives one checker and retains it for its own lifetime. No database scopes exist yet.
+M1 registered `StartupCheckState` as a singleton; M2 replaces it with `AddSingleton<MonitoringState>()`, still one shared state object for the host. `AddTransient<HttpChecker>()` creates a checker whenever resolved. The worker receives one and retains it, safely using it for multiple checks because it has no mutable per-target fields. No database scopes exist yet.
 
 The named HTTP client registration sets shared policy, including the user agent and transport handler. A short-lived `HttpClient` created by the factory uses managed underlying handlers; disposing the client does not mean creating a new TCP connection for every dependency resolution.
 
 ### `async`, tasks, and cancellation in a real request
 
-The checker method is `public async Task<CheckResult> CheckAsync(CancellationToken cancellationToken)`. It awaits `SendAsync`, which yields during network I/O. Compare this with awaiting `fetch` in JavaScript; the caller receives a task representing the eventual result.
+The current checker method is `public async Task<CheckResult> CheckAsync(TargetOptions target, CancellationToken cancellationToken)`. It awaits `SendAsync`, which yields during network I/O. Compare this with awaiting `fetch` in JavaScript; the caller receives a task representing the eventual result.
 
 A linked `CancellationTokenSource` combines the host's cancellation with the check timeout. The checker distinguishes them:
 
@@ -158,7 +160,7 @@ catch (OperationCanceledException) when (cancellationToken.IsCancellationRequest
 
 `when` is an exception filter. Bare `throw;` rethrows while preserving the original exception context. Timeout cancellation is handled separately and returns a failed observation. Expected `HttpRequestException` failures become categories; unexpected programming errors are not swallowed by a blanket catch.
 
-`Stopwatch` measures elapsed duration; `TimeProvider.GetUtcNow()` supplies the observation timestamp. Response timing ends at headers, not at complete body download.
+M1 used `Stopwatch` for elapsed duration. M2 uses `TimeProvider.GetTimestamp()` and `GetElapsedTime()` so tests can control the monotonic clock too. `TimeProvider.GetUtcNow()` supplies the observation timestamp. Response timing ends at headers, not at complete body download.
 
 ### Two meanings of `using`
 
@@ -178,7 +180,7 @@ Collections such as `addresses.Any(...)` and `.Distinct()` use LINQ to inspect i
 
 ### Hosting and JSON responses
 
-[StartupCheckService](backend/UptimeUrpo.Api/Monitoring/StartupCheckService.cs) implements `IHostedService`. The host awaits `StartAsync` during startup and calls `StopAsync` during shutdown. This hook performs one check and returns; it has no loop. M2 will introduce `BackgroundService` for recurring work.
+M1's `StartupCheckService` implemented `IHostedService`: the host awaited one check in `StartAsync` and called `StopAsync` at shutdown. M2 replaces that class with [MonitoringWorker](backend/UptimeUrpo.Api/Monitoring/MonitoringWorker.cs), a `BackgroundService` whose `ExecuteAsync` runs until shutdown. See the next section for the lifecycle change.
 
 The endpoint handlers in `Program.cs` use lambdas (`=>`), similar to JavaScript arrow functions. ASP.NET Core binds the route's `id` and injects the options and saved state. `Results.Ok(...)` serializes the DTO with HTTP 200; a missing ID returns 404 Problem Details. The health endpoint returns a typed result with `TypedResults.Ok(...)`.
 
@@ -204,9 +206,89 @@ Follow the actual files and explain:
 
 Run the commands in [the M1 verification guide](docs/MILESTONE-1.md#run-locally), then walk through [tutorial Part 2](tutorial.md#part-2--build-the-first-c-api) with another learner.
 
+## Milestone 2 — Asynchronous lifecycle and shared state
+
+### `BackgroundService` owns a task that lasts until shutdown
+
+Read [MonitoringWorker](backend/UptimeUrpo.Api/Monitoring/MonitoringWorker.cs). It inherits from `BackgroundService` and overrides `ExecuteAsync(CancellationToken stoppingToken)`. `override` supplies our implementation of a method defined by the base class.
+
+The returned task represents the worker's whole lifetime. In .NET 10, `ExecuteAsync` runs in the background without blocking other hosted services from starting. The API can therefore serve an initial UNKNOWN response while the first check is pending. See [Microsoft's .NET 10 behavior note](https://learn.microsoft.com/en-us/dotnet/core/compatibility/extensions/10.0/backgroundservice-executeasync-task).
+
+Compare this with starting a long-lived async function in Node and retaining its promise so shutdown can await it. ASP.NET Core owns the lifecycle rather than leaving a loose promise running after application shutdown.
+
+### One sequential loop per target
+
+`MonitorAsync` awaits a check, records it, then awaits a delay. It cannot begin that target's next check while the previous await is unfinished. We use a fixed delay after completion, avoiding interval callbacks that can overlap when work takes longer than expected.
+
+`Task.WhenAll` joins the target-loop tasks, comparable to `Promise.all`. It does not mean allocating a dedicated thread for each website. Awaiting HTTP, a semaphore, or a delay yields while there is nothing to execute.
+
+### `SemaphoreSlim` limits concurrent asynchronous work
+
+The actual worker uses:
+
+```csharp
+await slots.WaitAsync(stoppingToken);
+try
+{
+    // Check and save one observation.
+}
+finally
+{
+    slots.Release();
+}
+```
+
+This is an abbreviated excerpt; the complete `try` body is in the worker. A semaphore is a counted gate: three slots permit at most three active checks. A fourth loop waits asynchronously. `finally` releases an acquired slot even when the request fails or is cancelled.
+
+The slot is released before the interval delay, so sleeping targets do not consume network-work capacity. Each target has at most one pending loop, and configuration limits the total target count. This is an application-level async concurrency limit, not a distributed lock or a thread pool size.
+
+### Cancellation travels through every wait
+
+The stopping token reaches the semaphore, checker, and interval delay. A target's independent timeout reaches only its own HTTP request. One target timing out cannot cancel the other target loops.
+
+The worker rethrows host cancellation from a loop, and `ExecuteAsync` recognizes cancellation as normal shutdown. `StopAsync` waits for the joined loops. It does not fabricate a failed target observation. An unexpected checker error instead logs a sanitized error and leaves a monitoring gap, allowing the next normal interval to try again.
+
+### `lock` protects a short state update
+
+Node code often relies on an event loop when accessing an in-memory object. ASP.NET Core request handlers and worker continuations can execute concurrently, so a mutable dictionary and multi-field updates need synchronization.
+
+[MonitoringState](backend/UptimeUrpo.Api/Monitoring/MonitoringState.cs) uses `lock (_gate)` around recording or copying a snapshot. Related fields—result, completion time, and failure count—change as one protected operation. Readers receive a separate response record, rather than the mutable internal entry.
+
+A `lock` is appropriate for these tiny synchronous operations. We never hold it during HTTP work or an `await`. It is different from `SemaphoreSlim.WaitAsync`, which is the async gate used around requests.
+
+### Monotonic time answers “how long?”
+
+`GetUtcNow()` answers “what time should we display?” A monotonic timestamp answers “how much time elapsed?” Wall-clock adjustments must not turn a fresh observation stale.
+
+The checker uses time-provider-aware cancellation deadlines and elapsed duration. The worker uses `Task.Delay(interval, _time, stoppingToken)`. State uses monotonic elapsed time since completion. All use `TimeProvider.System` in the running application.
+
+Tests replace that provider with `FakeTimeProvider` from a test-only Microsoft package. `clock.Advance(TimeSpan.FromSeconds(60))` moves scenario time forward without waiting a minute. Test helpers also wait briefly for async continuations to settle before asserting; fake time alone does not guarantee every continuation has run.
+
+### Pure observations versus derived health
+
+A `CheckResult` describes one completed request. `HealthStatus` describes what that evidence means **now**. A slow matching response is successful but DEGRADED; a previously successful result becomes UNKNOWN if stale. Reading health never rewrites the historical observation.
+
+Consecutive failures increment until the threshold, a success resets them, and a stale gap breaks the streak. The counter saturates at the threshold. [State tests](tests/UptimeUrpo.UnitTests/MonitoringStateTests.cs) exercise these rules without network work. [Worker tests](tests/UptimeUrpo.UnitTests/MonitoringWorkerTests.cs) exercise scheduling and resource limits with controlled pending requests.
+
+### Configuration compatibility is part of an interface
+
+[MonitoringOptions](backend/UptimeUrpo.Api/Monitoring/MonitoringOptions.cs) adds a list of `TargetOptions`, unique-ID validation, and a global limit. Its nullable `Target` property accepts the old single-target shape. `GetTargets()` presents one effective list to the rest of the application.
+
+The code rejects a nonempty new list combined with an old target. Silent merging could unexpectedly add or duplicate checks. Empty committed configuration is valid and sends no requests. Timeouts must be shorter than intervals to keep normal request timing compatible with the freshness rules. Runtime changes still require restart.
+
+### Explain it back
+
+1. Why does an awaited sequential loop prevent overlap for one target?
+2. Why must the semaphore slot be released before the interval delay?
+3. Which waits must receive the stopping token?
+4. Why can UNKNOWN contain a previously successful `lastCheck`?
+5. Why does `Task.WhenAll` not mean one dedicated thread per target?
+6. Why do tests advance a fake clock and then wait for continuations?
+
+Follow [tutorial Part 3](tutorial.md#part-3--run-checks-in-the-background) for a runnable teaching session and [the M2 guide](docs/MILESTONE-2.md) for exact configuration, API fields, and verification evidence.
+
 ## Future entries
 
-- M2: `BackgroundService`, lifecycle, concurrency, time, and state transitions.
 - M3: EF Core entities, scoped contexts, LINQ, migrations, transactions, and PostgreSQL tests.
 - M4: DTOs, validation, query composition, API errors, and availability calculations.
 - M5–M7: frontend integration, production configuration, operations, and automated delivery.

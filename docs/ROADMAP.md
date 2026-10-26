@@ -1,6 +1,6 @@
 # Milestones and acceptance criteria
 
-Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0 and M1 are complete and locally verified; M2–M8 are planned. See [the M0 verification record](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25) and [the M1 verification record](MILESTONE-1.md#verification-record--2026-10-25).
+Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M2 are complete and locally verified; M3–M8 are planned. See [the M0 verification record](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [the historical M1 record](MILESTONE-1.md#verification-record--2026-10-25), and [the current M2 record](MILESTONE-2.md#verification-record--2026-10-25).
 
 At every milestone:
 
@@ -25,6 +25,8 @@ Create the solution, one ASP.NET Core Minimal API project, and xUnit unit/API in
 Acceptance: `dotnet build` and `dotnet test` pass. Deterministic tests cover exact expected/unexpected HTTP status, DNS/connection/TLS failure categories, timeout versus shutdown cancellation, safe destinations/redirect behavior, and JSON contracts. Tests do not require public internet. Demonstrate startup and read behavior separately against the approved real target, identifying it as an external smoke check.
 
 ## M2 — Background monitoring
+
+Status: complete. Fixed-delay per-target loops run under a shared concurrency limit. Current snapshots expose health, freshness, and failure streaks; both the new target list and legacy single-target settings are supported. In-memory state remains intentionally temporary. See [the implemented behavior and tests](MILESTONE-2.md).
 
 Introduce `BackgroundService`, validated multiple-target configuration, per-target scheduling/timeouts, concurrency limit, health state transitions, structured logs, and graceful shutdown. Results and state are in memory; document restart loss.
 

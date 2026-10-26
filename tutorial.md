@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1 and 2 are complete. Parts 3–9 are planned.** The application now performs one startup check and serves its saved result through a local API. It does not yet schedule checks or store history.
+Each part corresponds to one milestone. **Parts 1–3 are complete. Parts 4–9 are planned.** The application now checks configured targets repeatedly and serves current health snapshots. It does not yet persist history. Earlier parts record the implementation at that stage; Part 3 explains the current behavior and changes from the first API.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -193,6 +193,8 @@ Ask the learner:
 
 **Milestone 1 · Complete**
 
+This part records the one-shot API built in M1. M2 has since replaced the startup hook and added recurring checks and response fields. Read Part 3 for current behavior; the commands and examples here illustrate the earlier stage.
+
 ### What we built
 
 We added an ASP.NET Core application that performs one configured startup HTTP check and returns its saved observation through a read-only API. We also added tests for HTTP evaluation, cancellation, destination security, API behavior, and TLS.
@@ -333,7 +335,7 @@ The internal test constructor accepts a connection function (`Func<...>`). Like 
 
 ### Step 10: Explain one-shot startup versus scheduled monitoring
 
-Read [StartupCheckService](backend/UptimeUrpo.Api/Monitoring/StartupCheckService.cs). `IHostedService.StartAsync` runs as the host starts. If enabled, it awaits one check and saves the result in `StartupCheckState`. Then the server starts listening. Startup can therefore wait up to the configured check timeout.
+M1's `StartupCheckService` implemented `IHostedService.StartAsync`. If enabled, it awaited one check and saved the result in `StartupCheckState` before the server listened. M2 replaced those classes with [MonitoringWorker](backend/UptimeUrpo.Api/Monitoring/MonitoringWorker.cs) and [MonitoringState](backend/UptimeUrpo.Api/Monitoring/MonitoringState.cs); Part 3 explains how startup now remains responsive.
 
 The endpoint reads that state. It does not call the checker. There is no recurring task, stale-state calculation, or failure threshold yet. A failed check is evidence about one request, not a DOWN incident.
 
@@ -353,7 +355,7 @@ Our recorded live check of the approved owned target returned the expected HTTP 
 
 ### Step 12: Use the tests as executable explanations
 
-Open [the API tests](tests/UptimeUrpo.IntegrationTests/ApiTests.cs). `ReadsReturnTheSavedStartupResultWithoutMoreChecks` makes two API reads and asserts that the outbound handler was called once. `TargetFailureDoesNotFailApplicationLiveness` proves that a target 503 does not fail `/health`.
+Open [the API tests](tests/UptimeUrpo.IntegrationTests/ApiTests.cs). The current equivalent, `ReadsReturnTheSavedResultWithoutTriggeringMoreChecks`, makes two API reads between scheduled runs and asserts that reads cause no extra outbound call. `TargetFailureDoesNotFailApplicationLiveness` proves that a target 503 does not fail `/health`.
 
 For a focused failure demonstration, run:
 
@@ -389,9 +391,155 @@ Ask the learner:
 
 ## Part 3 — Run checks in the background
 
-**Milestone 2 · Planned; not built**
+**Milestone 2 · Complete**
 
-Introduce `BackgroundService`, multiple configured targets, intervals, timeouts, limited concurrency, health transitions, and graceful shutdown. Teach why asynchronous work, cancellation, and no-overlap scheduling matter. Demonstrate failures and recovery with controlled tests. Results remain in memory at this stage.
+### What we built
+
+The one-shot check is now a recurring monitor. Multiple configured services have independent intervals and timeouts. A shared limit bounds active checks, each service has one sequential loop, and current observations become UP, DOWN, DEGRADED, or UNKNOWN. The API includes a service list and additional health fields.
+
+We also added controlled-time tests and kept the existing destination/TLS protections. Results and failure streaks remain in memory. There is no PostgreSQL, history chart, incident log, uptime percentage, or UI yet.
+
+### What you need first
+
+Use the existing checkout and .NET SDK. Build and test from the root as in Part 2. No Docker or public service is needed for automated tests. An enabled real target will receive recurring requests while the application runs.
+
+### Step 1: Follow the lifecycle change
+
+Read [MonitoringWorker](backend/UptimeUrpo.Api/Monitoring/MonitoringWorker.cs). It inherits `BackgroundService` and overrides `ExecuteAsync`. The method returns a task representing all its monitoring loops until shutdown.
+
+In .NET 10, that work runs in the background without blocking the web host's startup. A first API response can therefore contain UNKNOWN with no completed observation. This is an intentional change from M1's startup wait.
+
+Think of starting an async function in Node, retaining its promise, and awaiting it during shutdown. Here, the host owns the lifecycle. `Task.WhenAll` joins the per-target tasks, much like `Promise.all`, so the worker can wait for every loop to finish when cancelled.
+
+### Step 2: Use the target list without breaking your current setup
+
+Open [MonitoringOptions](backend/UptimeUrpo.Api/Monitoring/MonitoringOptions.cs) and [the example configuration](backend/UptimeUrpo.Api/appsettings.Local.example.json). New configuration uses `Monitoring:Targets`, an array of target objects, plus `MaxConcurrency`.
+
+The M1 `Monitoring:Target` object still works. Its monitoring interval defaults to 60 seconds, timeout to 10 seconds, failure threshold to three, and slow-response threshold to 2,000 ms. We preserved the existing local settings, so you can continue using your working target without migration.
+
+To add more services, move that old object into a `Targets` array and remove the old `Target` property. Give every service a unique ID. The application rejects conflicting old/new shapes instead of silently adding unexpected checks. The full sanitized two-service example and limits are in [the M2 configuration guide](docs/MILESTONE-2.md#configuration).
+
+The committed configuration has no targets, so a clean checkout sends no requests. Disabled entries are visible but never checked. Restart after editing configuration; there is no live administration API.
+
+### Step 3: Understand the interval precisely
+
+Each loop performs these steps:
+
+```text
+Wait for a global slot
+  → await one check
+  → save the result and log safe fields
+  → release the slot
+  → await this target's interval
+  → repeat until cancelled
+```
+
+The interval is a delay **after completion**. A 200-ms check with a 60-second interval starts roughly every 60.2 seconds when capacity is available. It is not a cron-style promise to run exactly on the minute.
+
+Because the loop awaits its own request, it cannot overlap another check for that service. Because it creates the next delay after completion, it has no backlog of missed runs. After a long pause there can be one pending attempt per target, still governed by the global limit.
+
+### Step 4: See how the concurrency gate works
+
+The worker creates `new SemaphoreSlim(_options.MaxConcurrency)`. With the default three slots, three loops can hold a slot and a fourth must wait asynchronously.
+
+Look at `WaitAsync(stoppingToken)`, `try`, and `finally` in `MonitorAsync`. A slot is always released after it was acquired, including on cancellation or an error. It is released before the interval delay so sleeping services do not block other services.
+
+An async loop does not require a dedicated thread sitting idle for each target. Awaiting I/O or a delay yields until work can continue. A slow request can consume one slot, but other targets progress through the remaining slots.
+
+### Step 5: Inspect the health rules
+
+Read [MonitoringState](backend/UptimeUrpo.Api/Monitoring/MonitoringState.cs). Health is derived from the latest observation and its freshness:
+
+- **UNKNOWN:** disabled, no completed result, or completion was more than twice the interval ago.
+- **UP:** a fresh expected response at or below the slow threshold.
+- **DEGRADED:** a fresh slow success, or failures below the DOWN threshold.
+- **DOWN:** fresh consecutive failures reaching the threshold.
+
+One success resets the streak, even if slow. A slow success recovers DOWN to DEGRADED. A stale gap breaks the failure streak. A single transient failure normally produces DEGRADED, not DOWN. The displayed failure count saturates at the configured threshold.
+
+These are health snapshots, not incident records. UNKNOWN does not mean an outage recovered. A success that becomes stale stays visible as an old `lastCheck` while current health becomes UNKNOWN.
+
+### Step 6: Learn why completion time differs from request time
+
+`lastCheck.checkedAtUtc` says when the request started. `lastCompletedAtUtc` says when its outcome became available. Freshness uses elapsed time since completion.
+
+The code uses UTC for display and monotonic timestamps for elapsed time. Adjusting the machine's wall clock must not make an observation artificially fresh or stale. A `TimeProvider` supplies both concepts, allowing tests to control time without waiting real minutes.
+
+Timeouts must be shorter than intervals. Otherwise, a normal long timeout could make every observation stale before the following one completes, undermining the failure-streak rules. Startup validation catches that configuration rather than letting the monitor behave misleadingly.
+
+### Step 7: Understand shared state and `lock`
+
+The worker writes observations while API handlers read them. Those operations may run concurrently in .NET. `MonitoringState` uses a short `lock` around updates and snapshot creation so related fields stay consistent.
+
+No network request or `await` happens inside that lock. The response is a separate record, rather than a mutable dictionary entry. This is different from the semaphore: the lock protects a tiny synchronous state operation, while the semaphore limits asynchronous network work.
+
+### Step 8: Run the application and inspect all services
+
+```sh
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+dotnet restore Uptime-Urpo.slnx --locked-mode
+dotnet build Uptime-Urpo.slnx --no-restore
+dotnet test Uptime-Urpo.slnx --no-build --no-restore
+dotnet run --project backend/UptimeUrpo.Api --no-build --no-launch-profile
+```
+
+In another terminal:
+
+```sh
+curl --fail http://127.0.0.1:5080/health
+curl --fail http://127.0.0.1:5080/api/services
+```
+
+The list contains all configured services, including disabled ones. An empty list is correct when no targets are configured. Use an ID from the list to read `/api/services/{id}`; this checkout's preserved local target uses `iltapaska`.
+
+Inspect `health`, `consecutiveFailures`, `lastCompletedAtUtc`, and `lastCheck`. With an enabled target, read again after the interval plus request time and the timestamp should advance. Reads themselves do not cause checks, but they can differ because the worker runs independently. Keep the local API on loopback; authentication and deployment access controls are later work.
+
+### Step 9: Demonstrate failures without breaking a website
+
+Run the API test that supplies controlled 503 responses followed by 200:
+
+```sh
+dotnet test tests/UptimeUrpo.IntegrationTests --no-build --no-restore --filter FullyQualifiedName~ScheduledFailuresReachDownAndASuccessRecovers
+```
+
+Open [the test](tests/UptimeUrpo.IntegrationTests/ApiTests.cs). It waits for the first recorded check, advances the fake clock to subsequent intervals, observes DOWN after three failures, then supplies success and observes UP. The test makes no public requests and does not take down any real service.
+
+Run scheduling and state tests separately:
+
+```sh
+dotnet test tests/UptimeUrpo.UnitTests --no-build --no-restore --filter FullyQualifiedName~MonitoringWorkerTests
+dotnet test tests/UptimeUrpo.UnitTests --no-build --no-restore --filter FullyQualifiedName~MonitoringStateTests
+```
+
+[Worker tests](tests/UptimeUrpo.UnitTests/MonitoringWorkerTests.cs) hold fake requests open, inspect queued work, advance time, and release responses deliberately. [State tests](tests/UptimeUrpo.UnitTests/MonitoringStateTests.cs) cover thresholds, freshness boundaries, gap reset, and clock corrections. Small real waits coordinate task continuations; scenario time comes from the fake clock.
+
+### Step 10: Explain graceful shutdown and recovery
+
+The stopping token flows through semaphore waits, requests, and interval delays. Ctrl+C on a foreground run asks the host to cancel the worker, await all loops, and release resources. Host cancellation is not stored as a failed website check.
+
+Normal HTTP/network failures produce sanitized results and the next interval runs normally. An unexpected internal checker error produces a safe error log and a gap rather than invented downtime; its loop can try again after the interval. If errors persist, old data becomes UNKNOWN. Logs must be investigated, not interpreted as proof that the target is DOWN.
+
+Stop the process after a teaching session. State is deliberately lost on restart: history and restart continuity arrive with PostgreSQL in Part 4.
+
+### What was verified
+
+All 126 cases passed: 102 unit cases and 24 integration cases. A separate local process observed two scheduled HTTP 200 / UP results for the approved owned target, approximately a minute apart, and exited cleanly on SIGTERM. The existing local configuration was preserved and the smoke process was stopped.
+
+See [the dated M2 record](docs/MILESTONE-2.md#verification-record--2026-10-25). This is local evidence, not a deployment claim. No NUC or database work occurred.
+
+### Teach this part
+
+For a short session, show the service-list JSON, trace the worker loop, then run the controlled failure/recovery test. Ask the learner:
+
+- Why release the semaphore before sleeping? **A sleeping service should not consume a slot needed by another service.**
+- What prevents overlap for one target? **Its next iteration cannot begin before its own awaited check and delay finish.**
+- Why can a successful result show DEGRADED? **Availability and response speed are separate aspects of health.**
+- Why can UNKNOWN contain a successful `lastCheck`? **The historical result exists, but it is no longer fresh evidence of current health.**
+- Why does a wall-clock correction not change freshness? **Elapsed time is measured with monotonic timestamps.**
+- Does graceful shutdown establish a website outage? **No; host cancellation is not a target observation.**
+
+**What remains:** PostgreSQL, durable history, incidents, uptime calculations, and the dashboard. Part 4 requires approval before implementation.
 
 ## Part 4 — Keep monitoring history in PostgreSQL
 

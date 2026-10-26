@@ -1,6 +1,6 @@
 # Milestone 1 — First C# API
 
-Status: implemented and locally verified. M2 is awaiting approval.
+Historical M1 record: implemented and locally verified before M2 approval. **The current code now uses recurring checks and additional response fields.** Use [the M2 guide](MILESTONE-2.md) for current behavior and configuration. The commands/results below document the earlier stage; the one-shot service and its test names have since been replaced.
 
 ## What was built
 
@@ -144,4 +144,4 @@ Follow [tutorial Part 2](../tutorial.md#part-2--build-the-first-c-api) and [the 
 
 You can now follow configuration → dependency injection → startup hook → asynchronous HTTP → result record → endpoint JSON, and explain why a target failure is different from API liveness.
 
-M2 will add a background loop, multiple targets, bounded concurrency, health thresholds, freshness, and deterministic scheduling tests. It requires approval before implementation.
+M2 was subsequently approved and adds the background loop, multiple targets, bounded concurrency, health thresholds, freshness, and deterministic scheduling tests. See [the M2 record](MILESTONE-2.md).

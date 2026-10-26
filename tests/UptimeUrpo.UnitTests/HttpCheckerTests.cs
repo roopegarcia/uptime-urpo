@@ -1,5 +1,5 @@
 using System.Net;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using UptimeUrpo.Api.Monitoring;
 
 namespace UptimeUrpo.UnitTests;
@@ -20,9 +20,9 @@ public sealed class HttpCheckerTests
             Assert.Equal(HttpMethod.Get, request.Method);
             return Task.FromResult(new HttpResponseMessage((HttpStatusCode)actual) { Content = content });
         });
-        var checker = CreateChecker(handler, new TargetOptions { ExpectedStatusCode = expected });
+        var checker = CreateChecker(handler);
 
-        var result = await checker.CheckAsync(CancellationToken.None);
+        var result = await checker.CheckAsync(new TargetOptions { ExpectedStatusCode = expected }, CancellationToken.None);
 
         Assert.Equal(actual, result.StatusCode);
         Assert.Equal(success, result.Success);
@@ -42,7 +42,7 @@ public sealed class HttpCheckerTests
     {
         var handler = new StubHandler((_, _) => throw new HttpRequestException(error, "private detail"));
 
-        var result = await CreateChecker(handler).CheckAsync(CancellationToken.None);
+        var result = await CreateChecker(handler).CheckAsync(new TargetOptions(), CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Null(result.StatusCode);
@@ -55,7 +55,7 @@ public sealed class HttpCheckerTests
         var handler = new StubHandler((_, _) => throw new HttpRequestException(
             HttpRequestError.ConnectionError, "transport wrapper", new BlockedDestinationException()));
 
-        var result = await CreateChecker(handler).CheckAsync(CancellationToken.None);
+        var result = await CreateChecker(handler).CheckAsync(new TargetOptions(), CancellationToken.None);
 
         Assert.Equal(FailureCategory.BlockedDestination, result.FailureCategory);
     }
@@ -67,7 +67,7 @@ public sealed class HttpCheckerTests
             HttpRequestError.ConnectionError, "wrapper", new HttpRequestException(
                 HttpRequestError.NameResolutionError, "private DNS detail")));
 
-        var result = await CreateChecker(handler).CheckAsync(CancellationToken.None);
+        var result = await CreateChecker(handler).CheckAsync(new TargetOptions(), CancellationToken.None);
 
         Assert.Equal(FailureCategory.Dns, result.FailureCategory);
     }
@@ -83,8 +83,11 @@ public sealed class HttpCheckerTests
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
 
-        var result = await CreateChecker(handler, new TargetOptions { TimeoutSeconds = 1 })
-            .CheckAsync(CancellationToken.None);
+        var clock = new FakeTimeProvider();
+        var check = CreateChecker(handler, clock)
+            .CheckAsync(new TargetOptions { TimeoutSeconds = 1 }, CancellationToken.None);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var result = await check;
 
         Assert.True(cancelled);
         Assert.False(result.Success);
@@ -104,11 +107,11 @@ public sealed class HttpCheckerTests
         });
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            CreateChecker(handler).CheckAsync(shutdown.Token));
+            CreateChecker(handler).CheckAsync(new TargetOptions(), shutdown.Token));
     }
 
-    private static HttpChecker CreateChecker(HttpMessageHandler handler, TargetOptions? target = null) =>
-        new(new StubClientFactory(handler), Options.Create(target ?? new TargetOptions()), TimeProvider.System);
+    private static HttpChecker CreateChecker(HttpMessageHandler handler, TimeProvider? time = null) =>
+        new(new StubClientFactory(handler), time ?? TimeProvider.System);
 
     private sealed class StubClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.Options;
 using UptimeUrpo.Api.Contracts;
 using UptimeUrpo.Api.Monitoring;
 
@@ -19,13 +18,17 @@ if (string.IsNullOrWhiteSpace(builder.Configuration["urls"]))
 
 builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(options =>
+{
     options.SerializerOptions.Converters.Add(
-        new JsonStringEnumConverter<FailureCategory>(JsonNamingPolicy.SnakeCaseLower)));
+        new JsonStringEnumConverter<FailureCategory>(JsonNamingPolicy.SnakeCaseLower));
+    options.SerializerOptions.Converters.Add(
+        new JsonStringEnumConverter<HealthStatus>(JsonNamingPolicy.SnakeCaseUpper));
+});
 
-builder.Services.AddOptions<TargetOptions>()
-    .BindConfiguration("Monitoring:Target")
-    .Validate(target => target.IsValid(),
-        "Monitoring:Target requires a safe ID/name, an HTTPS DNS URL on port 443 without credentials/query/fragment, an expected status from 200 to 599, and a timeout from 1 to 30 seconds.")
+builder.Services.AddOptions<MonitoringOptions>()
+    .BindConfiguration("Monitoring")
+    .Validate(options => options.IsValid(),
+        "Monitoring requires 0-20 valid targets with unique IDs, concurrency 1-8, and either Targets or legacy Target. See docs/MILESTONE-2.md for target limits.")
     .ValidateOnStart();
 
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
@@ -41,8 +44,8 @@ builder.Services.AddHttpClient(HttpChecker.ClientName, client =>
         services.GetRequiredService<PublicHttpsConnector>().CreateHandler())
     .RemoveAllLoggers(); // Default HTTP client logs include destination URLs.
 builder.Services.AddTransient<HttpChecker>();
-builder.Services.AddSingleton<StartupCheckState>();
-builder.Services.AddHostedService<StartupCheckService>();
+builder.Services.AddSingleton<MonitoringState>();
+builder.Services.AddHostedService<MonitoringWorker>();
 
 var app = builder.Build();
 app.UseExceptionHandler();
@@ -50,11 +53,13 @@ app.UseStatusCodePages();
 
 app.MapGet("/health", () => TypedResults.Ok(new HealthResponse("ok")));
 
-app.MapGet("/api/services/{id}", (string id, IOptions<TargetOptions> options, StartupCheckState state) =>
+app.MapGet("/api/services", (MonitoringState state) => TypedResults.Ok(state.GetAll()));
+
+app.MapGet("/api/services/{id}", (string id, MonitoringState state) =>
 {
-    var target = options.Value;
-    return id == target.Id
-        ? Results.Ok(new ServiceResponse(target.Id, target.Name, target.Enabled, state.LastCheck))
+    var service = state.Get(id);
+    return service is not null
+        ? Results.Ok(service)
         : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Service not found");
 });
 

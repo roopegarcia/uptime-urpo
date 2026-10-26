@@ -4,15 +4,15 @@ A C#/.NET learning and portfolio project building a private, self-hosted uptime 
 
 ## Current status
 
-**Milestone 1 complete: first C# API.** The application performs one configured startup HTTP check, stores the observation in memory, and serves a safe JSON response. It includes `/health`, `GET /api/services/{id}`, outbound destination protection, and unit/API/TLS tests. See [the M1 walkthrough and verification record](docs/MILESTONE-1.md).
+**Milestone 2 complete: background monitoring.** The application checks configured services automatically, limits concurrent work, and reports UP, DOWN, DEGRADED, or UNKNOWN. It includes `/health`, `GET /api/services`, and service-detail snapshots, with in-memory state and unit/API/TLS tests. See [the M2 walkthrough and verification record](docs/MILESTONE-2.md).
 
-Scheduled monitoring, health thresholds, PostgreSQL, incident history, the dashboard, deployment, and CI remain planned. The startup result is lost on restart and never refreshed within that process. Nothing has been installed on or deployed to the NUC. See [the roadmap](docs/ROADMAP.md).
+PostgreSQL, durable history, incidents, uptime statistics, the dashboard, deployment, and CI remain planned. Results and failure streaks are lost on restart. Nothing has been installed on or deployed to the NUC. See [the roadmap](docs/ROADMAP.md).
 
-Milestone 2 requires approval before background monitoring begins. Each later milestone has the same gate.
+Milestone 3 requires approval before PostgreSQL work begins. Each later milestone has the same gate.
 
 ## Planned application
 
-One ASP.NET Core application will host a read-only API and background HTTP checker. PostgreSQL will store check results and incidents. A React dashboard will show current health, observed availability, monitoring coverage, response-time history, and incidents.
+One ASP.NET Core application hosts a read-only API and background HTTP checker. PostgreSQL will store check results and incidents. A React dashboard will show current health, observed availability, monitoring coverage, response-time history, and incidents.
 
 The first deployment will be private. Targets will be defined in private operator configuration; there will be no public URL submission or administration endpoints. The production application will serve the frontend and API from the same origin.
 
@@ -20,7 +20,7 @@ The selected stack is .NET 10 LTS / C# 14, ASP.NET Core Minimal APIs, EF Core 10
 
 ## Start here
 
-For a guided walkthrough you can also use to teach the project, read [the tutorial](tutorial.md): Part 1 explains setup; Part 2 follows the actual API code.
+For a guided walkthrough you can also use to teach the project, read [the tutorial](tutorial.md): Parts 1–2 explain setup and the first API; Part 3 follows the current worker, health states, and controlled-time tests.
 
 1. Follow [local development setup](docs/LOCAL-DEVELOPMENT.md).
 2. Read [architecture and operational decisions](docs/ARCHITECTURE.md).
@@ -38,13 +38,20 @@ dotnet test Uptime-Urpo.slnx --no-build --no-restore
 dotnet run --project backend/UptimeUrpo.Api --no-build --no-launch-profile
 ```
 
-The API binds to `http://127.0.0.1:5080` by default. In another terminal, run `curl http://127.0.0.1:5080/health`. The service-detail ID comes from your configuration. Committed defaults use `example` with monitoring disabled; this development checkout has an ignored local target configured for the approved live check. See [configuration and sample requests](docs/MILESTONE-1.md).
+The API binds to `http://127.0.0.1:5080` by default. In another terminal:
 
-Docker is not needed for M1 builds or tests. The [prerequisite script](scripts/check-prerequisites.sh) still checks the Docker readiness established in M0; a stopped engine does not block this milestone. Database tests in M3 will require Docker.
+```sh
+curl --fail http://127.0.0.1:5080/health
+curl --fail http://127.0.0.1:5080/api/services
+```
+
+Committed defaults contain no targets and send no requests. Use the ignored local configuration to add owned services; the existing M1 `Monitoring:Target` shape still works. A detail response is available at `/api/services/{id}` using an ID returned by the list endpoint. See [configuration, defaults, and migration](docs/MILESTONE-2.md#configuration).
+
+Docker is not needed for M1–M2 builds or tests. The [prerequisite script](scripts/check-prerequisites.sh) still checks the Docker readiness established in M0; a stopped engine does not block this milestone. Database tests in M3 will require Docker.
 
 ## Portfolio claims and limitations
 
-Implemented and locally verified: a Minimal API, one-shot HTTP checking, configuration validation, DNS/IP connection policy, cancellation/error handling, saved-result DTOs, and 84 test cases. One live startup check of the approved owned target returned the expected HTTP 200. Persistence, uptime calculations, scheduling, UI, and deployment remain planned. The API is a local development application, with no built-in authentication; do not expose it beyond loopback. Future milestone records must distinguish implemented, locally verified, deployed, and operationally verified behavior.
+Implemented and locally verified: a Minimal API, recurring multi-target HTTP checking, bounded concurrency, configuration validation, DNS/IP connection policy, cancellation/error handling, health transitions, stale results, and 126 test cases. Two live scheduled checks of the approved owned target returned HTTP 200. Persistence, uptime calculations, UI, and deployment remain planned. The API is a local development application, with no built-in authentication; keep it on loopback. Future milestone records must distinguish implemented, locally verified, deployed, and operationally verified behavior.
 
 A monitor running on the same NUC as its targets cannot independently report NUC power loss, network loss, or its own failure. Missing monitoring data must stay visible as gaps. A successful HTTP response proves only that the configured expectation was met, not that every application feature works. An external observer can complement this project later.
 

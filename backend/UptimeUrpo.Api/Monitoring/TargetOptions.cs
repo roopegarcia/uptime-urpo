@@ -10,6 +10,9 @@ public sealed class TargetOptions
     public bool Enabled { get; set; }
     public int ExpectedStatusCode { get; set; } = 200;
     public int TimeoutSeconds { get; set; } = 10;
+    public int IntervalSeconds { get; set; } = 60;
+    public int FailureThreshold { get; set; } = 3;
+    public int SlowResponseThresholdMs { get; set; } = 2000;
 
     public bool IsValid()
     {
@@ -20,6 +23,10 @@ public sealed class TargetOptions
             && !Name.Any(char.IsControl)
             && ExpectedStatusCode is >= 200 and <= 599
             && TimeoutSeconds is >= 1 and <= 30
+            && IntervalSeconds is >= 5 and <= 86400
+            && TimeoutSeconds < IntervalSeconds
+            && FailureThreshold is >= 1 and <= 10
+            && SlowResponseThresholdMs is >= 1 and <= 30000
             && Url is { Length: <= 2048 }
             && Uri.TryCreate(Url, UriKind.Absolute, out var uri)
             && uri.Scheme == Uri.UriSchemeHttps

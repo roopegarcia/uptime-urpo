@@ -1,6 +1,6 @@
 # Local development prerequisites
 
-This guide records Milestone 0 setup on an Apple Silicon Mac. For the current application, build/test/run commands are in [the M1 guide](MILESTONE-1.md). Run commands from the repository root unless stated otherwise.
+This guide records Milestone 0 setup on an Apple Silicon Mac. For the current application, build/test/run commands are in [the M2 guide](MILESTONE-2.md). Run commands from the repository root unless stated otherwise.
 
 ## .NET SDK
 
@@ -60,7 +60,7 @@ VS Code with Microsoft's C# tooling is optional. The CLI is the reproducible bas
 
 Future real targets belong in private local configuration, not committed settings. The ignore file excludes local environment files and local/development JSON settings. Sanitized examples may be committed later. An ignore rule is not a security boundary: inspect staged changes before every commit.
 
-M1 now explicitly loads `appsettings.Local.json` and reapplies environment/CLI configuration afterward. .NET does not automatically load arbitrary `appsettings.Local.json` files. See [the implemented configuration precedence](MILESTONE-1.md#configure-one-owned-target). User Secrets are a possible alternative local source; this project currently uses the ignored local JSON file.
+The application explicitly loads `appsettings.Local.json` and reapplies environment/CLI configuration afterward. .NET does not automatically load arbitrary `appsettings.Local.json` files. See [the current configuration and migration rules](MILESTONE-2.md#configuration). User Secrets are a possible alternative local source; this project currently uses the ignored local JSON file.
 
 No credentials, private target list, connection strings, or NUC host details are required for M0. PostgreSQL and frontend tooling are intentionally deferred.
 
@@ -74,7 +74,7 @@ git diff --check
 
 The prerequisite script changes no services or project files. It exits nonzero if the selected SDK, Docker Compose, or Docker engine is unavailable. Node/npm are reported as optional until M5. SDK execution can create normal .NET user-level first-run/cache files.
 
-The commands above check prerequisites and shell syntax only. Application tests were added in M1 and are documented separately. Do not substitute a successful prerequisite check for application, production, or device verification. Docker can remain stopped for M1; the prerequisite checker still reports its absence because it checks the full M0 environment.
+The commands above check prerequisites and shell syntax only. Application tests were added in M1 and expanded in M2. Do not substitute a successful prerequisite check for application, production, or device verification. Docker can remain stopped for M1–M2; the prerequisite checker still reports its absence because it checks the full M0 environment.
 
 ## Milestone 0 verification record — 2026-10-25
 
