@@ -1,6 +1,6 @@
 # Architecture and decisions
 
-Status: accepted design direction for incremental implementation. M0–M2 are complete. The current application implements recurring multi-target checks, bounded concurrency, in-memory health/freshness, safe list/detail snapshots, `/health`, and the outbound security boundary. Persistence, incidents, uptime statistics, dashboard, and deployment remain **planned**. See [the current M2 interface and evidence](MILESTONE-2.md).
+Status: accepted design direction for incremental implementation. M0–M3 are complete. The current application implements recurring checks, bounded concurrency, durable PostgreSQL results/snapshots, configuration periods, retention, safe list/detail snapshots, liveness/readiness, and the outbound security boundary. Incidents, uptime statistics, history HTTP API, dashboard, and deployment remain **planned**. See [the current M3 interface and evidence](MILESTONE-3.md).
 
 ## System shape
 
@@ -80,7 +80,9 @@ Unexpected HTTP status, DNS failure, connection failure, timeout, and TLS failur
 
 ## Persistence and observed availability
 
-Milestone 3 introduces `MonitoredService`, `CheckResult`, and `Incident`, with an index on `(ServiceId, CheckedAtUtc)`. Check results include UTC check time, duration in milliseconds, nullable HTTP status, success/failure, and failure category. Persist a result and its incident/state transition in one transaction.
+M3 introduces `MonitoredService`, `MonitoringPeriod`, and `CheckRecord`, with an index on `(ServiceId, CheckedAtUtc)` and a completion-time index for retention. Results include UTC request-start/completion, duration, nullable HTTP status, success/failure, and failure category. A result and the current snapshot/failure streak are saved atomically before the cache is updated. Incident entities/transitions arrive in M4, where their writes must join the same transaction.
+
+The background worker opens a separate DI scope/context per operation. Startup requires an explicitly migrated schema, synchronizes configuration periods, and restores durable snapshots; UTC age bridges restart, then in-process freshness uses monotonic time again. Missing/unreachable storage leaves readiness unhealthy and delays initialization; write failures discard the unsaved observation and retain gaps without an unbounded queue. The application has no runtime in-memory persistence mode. Test-only stores keep fast unit/API tests independent of Docker.
 
 Record monitoring configuration periods from first enablement so enabled time and interval changes remain available for historical coverage calculations. Disabled periods, time before enrollment, and retired target periods must not be counted as missed monitoring. Stable IDs preserve identity when a display name changes; material target changes must be documented rather than silently rewriting history.
 
@@ -92,7 +94,7 @@ For UTC windows `[start, end)` of 24 hours, seven days, and 30 days:
 - **Coverage:** observed scheduled opportunities divided by expected opportunities during enabled configuration periods. Assign results to scheduled opportunities so multiple observations cannot inflate coverage; finalize the opportunity mapping and boundary cases with the M4 calculation tests.
 - Missing opportunities are unknown, excluded from the availability denominator, and displayed as chart gaps. These are sample-based statistics, not time-weighted SLA measurements.
 
-Retain raw check results for 90 days and closed incidents for 365 days. Never expire an open incident. Run bounded batched cleanup away from request processing. At five targets and one check per minute, raw results grow by about 7,200 rows/day or 648,000 rows over 90 days; an indexed PostgreSQL table is sufficient initially.
+M3 retains raw check results for 90 days, using at most 500 deletes per minute by default. Current durable snapshots and configuration periods are retained separately. Future M4 incident policy: retain closed incidents for 365 days and never expire an open incident. At five targets and roughly one check per minute, raw results grow by about 7,200 rows/day or 648,000 rows over 90 days; an indexed PostgreSQL table is sufficient initially.
 
 Database unavailability must not create fabricated history or an unbounded queue. Log sanitized persistence failures, mark readiness unhealthy, and retain gaps after recovery. Recovery of the monitor must not be presented as recovery of a target without a confirming check.
 
@@ -138,6 +140,8 @@ Self-monitoring on the NUC cannot independently detect NUC power/network loss or
 
 ## Version and design references
 
+M3 pins EF Core/Relational/Design and `dotnet-ef` to 10.0.14, Npgsql EF provider to 10.0.3, and Testcontainers.PostgreSql to 4.16.0. PostgreSQL 18.6 is used locally and in disposable tests. Explicit EF relational pins align assembly patch versions across project references. Tests, not version-number similarity alone, establish compatibility. Migrations run explicitly with the schema owner, while the runtime uses a restricted role.
+
 M2 adds Microsoft.Extensions.TimeProvider.Testing 10.11.0 to test projects only. `TimeProvider` now controls request deadlines, elapsed duration, scheduling delays, and freshness. The production clock remains `TimeProvider.System`; no runtime scheduling library was added.
 
 M1 resolved xUnit 2.9.3, its VSTest runner 4.0.1, Microsoft.NET.Test.Sdk 18.11.0, and Microsoft.AspNetCore.Mvc.Testing 10.0.13 from NuGet. The runner declares support for xUnit v2 and .NET 8 or later. Restore/build/test verified compatibility with the pinned .NET 10 SDK; project lockfiles record transitive versions. The API itself adds no third-party runtime package. OpenAPI tooling is deferred to M4.
@@ -157,3 +161,5 @@ Version families were reviewed on 2026-10-25. Resolve exact compatible stable pa
 - [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
 - [.NET 10 background-service startup behavior](https://learn.microsoft.com/en-us/dotnet/core/compatibility/extensions/10.0/backgroundservice-executeasync-task)
 - [Time-provider-aware delays](https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.delay?view=net-10.0)
+- [EF migration application and separate identities](https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/applying)
+- [Testcontainers PostgreSQL module](https://dotnet.testcontainers.org/modules/postgres/)

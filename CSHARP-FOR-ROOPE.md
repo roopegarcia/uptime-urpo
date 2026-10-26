@@ -140,7 +140,7 @@ The API's JSON configuration serializes the failure enum as strings such as `une
 
 Read [HttpChecker's constructor](backend/UptimeUrpo.Api/Monitoring/HttpChecker.cs). It now requires `IHttpClientFactory` and `TimeProvider`. M1 also injected the one target's options; M2 instead passes a target to each check. The framework supplies constructor dependencies because `Program.cs` registers them.
 
-M1 registered `StartupCheckState` as a singleton; M2 replaces it with `AddSingleton<MonitoringState>()`, still one shared state object for the host. `AddTransient<HttpChecker>()` creates a checker whenever resolved. The worker receives one and retains it, safely using it for multiple checks because it has no mutable per-target fields. No database scopes exist yet.
+M1 registered `StartupCheckState` as a singleton; M2 replaced it with `AddSingleton<MonitoringState>()`, still one shared state object for the host. `AddTransient<HttpChecker>()` creates a checker whenever resolved. The worker receives one and retains it, safely using it for multiple checks because it has no mutable per-target fields. M3 now creates separate database scopes for persistence operations; see its section below.
 
 The named HTTP client registration sets shared policy, including the user agent and transport handler. A short-lived `HttpClient` created by the factory uses managed underlying handlers; disposing the client does not mean creating a new TCP connection for every dependency resolution.
 
@@ -207,6 +207,8 @@ Follow the actual files and explain:
 Run the commands in [the M1 verification guide](docs/MILESTONE-1.md#run-locally), then walk through [tutorial Part 2](tutorial.md#part-2--build-the-first-c-api) with another learner.
 
 ## Milestone 2 — Asynchronous lifecycle and shared state
+
+This section records the worker concepts introduced in M2. M3 adds a persistence step before publishing each result; see the next section for the current save/restore path.
 
 ### `BackgroundService` owns a task that lasts until shutdown
 
@@ -287,9 +289,87 @@ The code rejects a nonempty new list combined with an old target. Silent merging
 
 Follow [tutorial Part 3](tutorial.md#part-3--run-checks-in-the-background) for a runnable teaching session and [the M2 guide](docs/MILESTONE-2.md) for exact configuration, API fields, and verification evidence.
 
+## Milestone 3 — Entities, contexts, and transactions
+
+### Entity classes map to SQL tables
+
+Read [the entity classes](backend/UptimeUrpo.Api/Persistence/Entities.cs). `MonitoredService`, `MonitoringPeriod`, and `CheckRecord` are ordinary C# classes with properties. EF Core's model maps those properties to columns and identifies primary/foreign keys.
+
+You already understand SQL: `CheckRecord.ServiceId` becomes a foreign key to the service, while `MonitoringPeriodId` identifies the settings active for that observation. `long` corresponds to PostgreSQL `bigint`. Nullable C# fields such as `int? StatusCode` map to nullable columns. UTC `DateTimeOffset` values use PostgreSQL `timestamp with time zone`; PostgreSQL normalizes instants rather than retaining the original time-zone name.
+
+These entities are persistence shapes, not public DTOs. They include URLs and operational fields that do not belong in API responses. The current response records remain separate.
+
+### `DbContext` is one unit of database work
+
+[MonitoringDbContext](backend/UptimeUrpo.Api/Persistence/MonitoringDbContext.cs) inherits EF Core's `DbContext`. Its `DbSet<CheckRecord>` represents the mapped collection of history rows. `OnModelCreating` specifies keys, maximum lengths, indexes, relationships, enum conversion, and a nonnegative-duration constraint.
+
+Compare a context with a PHP ORM unit of work or a Node ORM's transaction-aware session. A context tracks entity instances and pending changes. It is not thread-safe, and it is not the database itself.
+
+`AddDbContext` registers a scoped context. The long-lived worker therefore creates an async DI scope per persistence operation, resolves `IMonitoringStore`, awaits the operation, then disposes that scope. Each parallel target gets a different context while the provider manages database connection pooling underneath.
+
+### Tracking and `SaveChangesAsync`
+
+In [MonitoringStore.SaveAsync](backend/UptimeUrpo.Api/Persistence/MonitoringStore.cs), querying a service returns a tracked entity. Assigning its latest result fields changes the tracked object. `db.Checks.Add(...)` tracks a new history entity. Neither action alone is the final database commit.
+
+`await db.SaveChangesAsync(token)` generates the required SQL and persists those related changes atomically in a transaction. If the history insert violates the duration constraint, the current snapshot update rolls back too. A real PostgreSQL test proves that behavior rather than relying on an in-memory ORM substitute.
+
+The latest snapshot deliberately duplicates a few observation fields. That makes startup restoration cheap and permits raw-history retention without deleting the last known snapshot. The transaction keeps both representations consistent.
+
+### LINQ describes the query before it runs
+
+The store's history method uses `Where`, `OrderByDescending`, `ThenByDescending`, and `Take`. With EF Core's `IQueryable`, these operations build an expression that the provider translates into SQL. `ToListAsync` executes it. `AsNoTracking` avoids change tracking for a read-only result.
+
+This differs from calling `.filter()` on an already loaded JavaScript array: filtering and limiting should happen in PostgreSQL before rows cross the network. In-memory LINQ, used in earlier milestones, executes against objects already in memory; the syntax can look similar while execution is different.
+
+The history query uses `[start, end)` timestamps, a stable secondary ID ordering, and a maximum result count. No HTTP history endpoint exists until M4; the method is currently exercised directly by database tests.
+
+### Migrations are versioned schema changes
+
+Read [the migration directory](backend/UptimeUrpo.Api/Persistence/Migrations/MonitoringDbContextModelSnapshot.cs) alongside `MonitoringDbContext`. The generated migration creates tables, constraints, and indexes. Its model snapshot lets EF compare future model changes with the previous migration model; it is not a backup of live data.
+
+This resembles versioned SQL migration files used in PHP or Node projects. `dotnet ef migrations add` generates a proposed change; review it before applying it. The local helper's explicit migration command applies outstanding changes with the schema owner and exits without starting checks. Normal startup never silently changes the schema.
+
+The migration's `Down` method drops tables. Reversing a schema change does not recover removed data. Backup/restore and production deployment safety remain separate M6 work.
+
+### Prepare, persist, then publish
+
+`MonitoringState.Prepare` calculates the next snapshot/failure count without exposing it. The worker saves it through the scoped store and calls `Apply` only after success. SQL failure leaves the previous memory snapshot unchanged, marks readiness unhealthy, and discards the unsaved observation.
+
+One narrow `IMonitoringStore` interface isolates the worker's persistence boundary for fast tests; `MonitoringStore` uses EF directly. There is no generic repository hierarchy or production memory fallback. Database tests use the real provider in disposable PostgreSQL.
+
+At startup, synchronization restores durable observations and failure streaks. UTC age reconstructs a freshness baseline across processes; old/future-dated records start UNKNOWN. Once running, monotonic time again protects freshness from wall-clock corrections. We cannot persist a meaningful monotonic timestamp across process lifetimes.
+
+### Configuration periods preserve evidence
+
+Changing a service's interval, enabled state, URL, expectation, timeout, or thresholds closes its old period and opens a new one. Display-name changes do not change identity. Removing a service retires it and preserves history.
+
+The partial unique index permits one open period per service. Synchronization closes changed periods before inserting replacements inside one explicit transaction. That ordering matters: it avoids temporarily violating the uniqueness rule. Future coverage calculations can use enabled periods instead of assuming every service was monitored forever.
+
+### Bounded maintenance and readiness
+
+[RetentionWorker](backend/UptimeUrpo.Api/Persistence/RetentionWorker.cs) creates its own scopes and deletes one small batch per minute. `ExecuteDeleteAsync` sends a database-side deletion instead of loading/tracking every old entity. Strictly older-than-cutoff deletion keeps the boundary unambiguous.
+
+Liveness still asks whether the API process responds. Readiness now asks whether storage initialization succeeded, recent writes are healthy, and the migrated schema can be queried. A target failure saved correctly does not make the monitor unready.
+
+### Real database tests
+
+[PostgresFixture](tests/UptimeUrpo.IntegrationTests/PostgresFixture.cs) starts a disposable container, creates restricted identities, and provisions a separate database for each scenario. [DatabaseTests](tests/UptimeUrpo.IntegrationTests/DatabaseTests.cs) applies migrations and exercises actual SQL, transactions, permissions, retention, and restart behavior. Its temporary credentials are generated during the test, not stored in Git.
+
+`await using` ensures asynchronous cleanup of connections, contexts, scopes, transactions, and containers. `CancellationToken` flows into queries and saves too, just as it did for HTTP requests.
+
+### Explain it back
+
+1. What does a `DbContext` track, and why must parallel checks not share one?
+2. When do property assignments become committed SQL writes?
+3. Why is the memory snapshot updated after the database save?
+4. How can raw history expire while the last known snapshot still exists?
+5. Why are migration and runtime database identities different?
+6. Why do real PostgreSQL tests matter for a transaction or permission rule?
+
+Follow [tutorial Part 4](tutorial.md#part-4--keep-monitoring-history-in-postgresql) and [the M3 run/verification guide](docs/MILESTONE-3.md).
+
 ## Future entries
 
-- M3: EF Core entities, scoped contexts, LINQ, migrations, transactions, and PostgreSQL tests.
 - M4: DTOs, validation, query composition, API errors, and availability calculations.
 - M5–M7: frontend integration, production configuration, operations, and automated delivery.
 

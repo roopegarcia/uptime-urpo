@@ -1,10 +1,10 @@
 # Local development prerequisites
 
-This guide records Milestone 0 setup on an Apple Silicon Mac. For the current application, build/test/run commands are in [the M2 guide](MILESTONE-2.md). Run commands from the repository root unless stated otherwise.
+This guide records Milestone 0 setup on an Apple Silicon Mac. For the current application, build/test/run commands are in [the M3 guide](MILESTONE-3.md). Run commands from the repository root unless stated otherwise.
 
 ## .NET SDK
 
-The repository selects SDK **10.0.402** in `global.json`, with `latestPatch` roll-forward within its feature band and prereleases disabled. This SDK includes .NET / ASP.NET Core **10.0.13**. Future SDK servicing updates are deliberate maintenance work; pinning does not update an installation automatically.
+The repository now selects SDK **10.0.403** in `global.json`, with `latestPatch` roll-forward within its feature band and prereleases disabled. This SDK includes .NET / ASP.NET Core **10.0.14**. M3 applied this servicing update after verifying the official release feed; the original M0 record below remains historical. Pinning does not update an installation automatically.
 
 The SDK is installed in `~/.dotnet`, outside Git. To use `dotnet` directly in the current terminal:
 
@@ -23,14 +23,14 @@ For a fresh Apple Silicon Mac without .NET, Microsoft's installer can reproduce 
 ```sh
 curl --fail --location --output /tmp/uptime-urpo-dotnet-install.sh https://dot.net/v1/dotnet-install.sh
 # Inspect the downloaded official installer before executing it.
-bash /tmp/uptime-urpo-dotnet-install.sh --version 10.0.402 --architecture arm64 --install-dir "$HOME/.dotnet"
+bash /tmp/uptime-urpo-dotnet-install.sh --version 10.0.403 --architecture arm64 --install-dir "$HOME/.dotnet"
 ```
 
-M0 installation used the official ARM64 SDK archive and verified its SHA-512 against [Microsoft's release metadata](https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json) before extraction. For this exact artifact:
+M0 installation and the M3 update used official ARM64 SDK archives and verified SHA-512 against [Microsoft's release metadata](https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json) before extraction. The current artifact is:
 
 ```text
-URL: https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.402/dotnet-sdk-10.0.402-osx-arm64.tar.gz
-SHA-512: ee0d379c144ebddef6efe851e1514883d1b695430d13b3fb13e8153f8476e1e5ac7abc42c08668471aaf4d738ff367cf53009845f94d224ba126febe74d00b75
+URL: https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-osx-arm64.tar.gz
+SHA-512: 5893c66b48ea3674c7da18501059d606e96f3672fabe4d5e41762e692c7c83df3ee0b2b9dc5a0786191da2dc413d7335158101c14c935ab217f31ac2529770f3
 ```
 
 Install an SDK, not only the runtime: the SDK supplies the compiler, templates, build tooling, and test commands. C# 14 ships with the .NET 10 SDK; no separate C# compiler installation is needed. On another platform, choose its native architecture through the [official .NET downloads](https://dotnet.microsoft.com/en-us/download/dotnet/10.0), rather than reusing the macOS archive.
@@ -74,7 +74,7 @@ git diff --check
 
 The prerequisite script changes no services or project files. It exits nonzero if the selected SDK, Docker Compose, or Docker engine is unavailable. Node/npm are reported as optional until M5. SDK execution can create normal .NET user-level first-run/cache files.
 
-The commands above check prerequisites and shell syntax only. Application tests were added in M1 and expanded in M2. Do not substitute a successful prerequisite check for application, production, or device verification. Docker can remain stopped for M1–M2; the prerequisite checker still reports its absence because it checks the full M0 environment.
+The commands above check prerequisites and shell syntax only. Application tests were added in M1, expanded in M2, and now include real PostgreSQL containers in M3. Docker is required for the full current suite and local database. The `Category!=Database` filter runs fast unit/API/TLS tests without PostgreSQL. Do not substitute a prerequisite check for application, production, or device verification.
 
 ## Milestone 0 verification record — 2026-10-25
 

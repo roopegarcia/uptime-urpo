@@ -1,6 +1,6 @@
 # Milestones and acceptance criteria
 
-Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M2 are complete and locally verified; M3–M8 are planned. See [the M0 verification record](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [the historical M1 record](MILESTONE-1.md#verification-record--2026-10-25), and [the current M2 record](MILESTONE-2.md#verification-record--2026-10-25).
+Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M3 are complete and locally verified; M4–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), and [M3](MILESTONE-3.md#verification-record--2026-10-26).
 
 At every milestone:
 
@@ -33,6 +33,8 @@ Introduce `BackgroundService`, validated multiple-target configuration, per-targ
 Acceptance: controlled-time tests demonstrate no overlapping target checks, global concurrency bounds, independent target progress, no catch-up bursts, failure threshold, recovery, stale UNKNOWN, and cancellation. A failing target does not stop the scheduler. Shutdown cancellation does not manufacture a DOWN result.
 
 ## M3 — PostgreSQL persistence
+
+Status: complete. Explicit migrations, scoped EF contexts, durable results/current snapshots, configuration periods, retention, readiness, and disposable PostgreSQL integration tests are implemented. Raw history can be queried through the tested store method; HTTP history and incidents remain M4. See [the implementation and operational instructions](MILESTONE-3.md).
 
 Verify and pin EF Core/Npgsql packages. Add entities, migrations, scoped database access, durable results/state, monitoring configuration periods, indexes, retention, and database-aware readiness. Introduce local PostgreSQL Compose configuration with isolated project resources and loopback-only access if a host port is needed for native .NET development. Database integration tests use disposable containers.
 

@@ -11,6 +11,8 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using UptimeUrpo.Api.Monitoring;
+using UptimeUrpo.Api.Persistence;
+using UptimeUrpo.TestSupport;
 
 namespace UptimeUrpo.IntegrationTests;
 
@@ -200,6 +202,7 @@ public sealed class ApiTests
     {
         public RecordingHandler Handler { get; } = new(status, networkFailure, blockRequest);
         public ObservingClock Clock { get; } = new();
+        public FakeMonitoringStore Store { get; } = new();
 
         public async Task WaitForIntervalsAsync(int count)
         {
@@ -217,6 +220,12 @@ public sealed class ApiTests
             builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.ConfigureTestServices(services =>
             {
+                foreach (var descriptor in services.Where(service => service.ServiceType == typeof(IHostedService)
+                    && service.ImplementationType == typeof(RetentionWorker)).ToArray()) services.Remove(descriptor);
+                services.RemoveAll<IMonitoringStore>();
+                services.AddSingleton<IMonitoringStore>(Store);
+                services.PostConfigure<DatabaseOptions>(options =>
+                    options.ConnectionString = "Host=127.0.0.1;Database=test;Username=test");
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton<TimeProvider>(Clock);
                 // Clear both shapes so ignored operator configuration can never reach the network.

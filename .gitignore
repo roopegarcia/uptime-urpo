@@ -5,6 +5,8 @@
 **/dist/
 **/coverage/
 **/TestResults/
+**/__pycache__/
+*.pyc
 
 # Local configuration and secrets: only sanitized examples belong in Git.
 .env

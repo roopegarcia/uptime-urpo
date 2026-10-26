@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–3 are complete. Parts 4–9 are planned.** The application now checks configured targets repeatedly and serves current health snapshots. It does not yet persist history. Earlier parts record the implementation at that stage; Part 3 explains the current behavior and changes from the first API.
+Each part corresponds to one milestone. **Parts 1–4 are complete. Parts 5–9 are planned.** The application now saves checks and current snapshots in PostgreSQL, restores state after restart, and reports database readiness. Earlier parts record the implementation at that stage; Part 4 explains the current database setup and save/restore path.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -61,6 +61,8 @@ We installed the SDK because this machine needs to compile and test C# code. The
 ### Step 3: Understand the SDK selection
 
 Open [global.json](global.json):
+
+The example below records M0's initial pin. M3 later updates the actual file to SDK 10.0.403/runtime 10.0.14; use the current setup guide when installing tooling.
 
 ```json
 {
@@ -393,6 +395,8 @@ Ask the learner:
 
 **Milestone 2 · Complete**
 
+This part records the in-memory worker introduced in M2. M3 now requires PostgreSQL and saves results before publishing them. Use Part 4 for current startup commands; the scheduling/health concepts below still apply.
+
 ### What we built
 
 The one-shot check is now a recurring monitor. Multiple configured services have independent intervals and timeouts. A shared limit bounds active checks, each service has one sequential loop, and current observations become UP, DOWN, DEGRADED, or UNKNOWN. The API includes a service list and additional health fields.
@@ -543,9 +547,177 @@ For a short session, show the service-list JSON, trace the worker loop, then run
 
 ## Part 4 — Keep monitoring history in PostgreSQL
 
-**Milestone 3 · Planned; not built**
+**Milestone 3 · Complete**
 
-Introduce EF Core, Npgsql, entities, migrations, LINQ, scoped database contexts, retention, and disposable database tests. Explain how a result survives an application restart and why database work must not share one context across concurrent checks.
+### What we built
+
+Checks now survive an application restart. PostgreSQL stores raw observations, the latest service snapshot/failure streak, and configuration periods. EF Core maps the data, a reviewed migration creates the schema, and a separate readiness endpoint reports storage availability.
+
+We added local Compose tooling, restricted runtime credentials, bounded retention, and real PostgreSQL tests. We did not add a history HTTP endpoint, uptime calculation, incident tracking, or a UI. Those remain later parts.
+
+The current flow is:
+
+```text
+Startup: verify schema → synchronize configuration → restore durable snapshots
+Check: HTTP result → prepare observation → save history + snapshot → publish to memory
+Read: API returns current snapshot; readiness checks storage separately
+```
+
+### What you need first
+
+Use this checkout, the pinned .NET SDK, Python 3, and a running Docker engine. The database is local; no NUC access or paid service is needed. Keep your existing private target settings. Start from the repository root.
+
+### Step 1: Restore the tools and start the isolated database
+
+```sh
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+dotnet restore Uptime-Urpo.slnx --locked-mode
+dotnet tool restore
+python3 scripts/dev-db.py up
+```
+
+Read [compose.dev.yaml](compose.dev.yaml) and [the helper](scripts/dev-db.py). They operate only on the `uptime-urpo-dev` project. PostgreSQL 18.6 binds to `127.0.0.1:54330` and persists in a named volume. Random local passwords are generated once in ignored `.local/database.env`, not printed or committed.
+
+Preserve that credential file with its volume. A new password file cannot reset credentials stored inside an existing database. The helper refuses to generate replacements if the volume already exists without its file. This protects your ability to diagnose and recover data rather than silently replacing credentials.
+
+### Step 2: Apply the migration explicitly
+
+```sh
+python3 scripts/dev-db.py migrate
+```
+
+The helper uses the migration role to run the application's explicit `--migrate=true` command, applies outstanding migrations, then exits. It does not start the API or send target requests. Repeating it is safe when there are no pending migrations.
+
+Normal API startup never automatically migrates. This keeps schema-changing permissions separate from normal monitoring. The helper removes runtime write access to EF's migration-history table after migration too.
+
+### Step 3: Read the entities and context
+
+Open [Entities.cs](backend/UptimeUrpo.Api/Persistence/Entities.cs) and [MonitoringDbContext](backend/UptimeUrpo.Api/Persistence/MonitoringDbContext.cs).
+
+`MonitoredService` is the service identity/current snapshot. `MonitoringPeriod` records the settings active over a period. `CheckRecord` is one raw observation. Their C# properties map to SQL columns; nullable fields represent observations that do not exist yet or a request with no HTTP response.
+
+The context maps relationships, lengths, indexes, and the nonnegative-duration constraint. It exposes `DbSet` collections, similar to an ORM session in a PHP or Node application. Its tracked objects are not API DTOs: URLs and storage fields stay behind the HTTP boundary.
+
+### Step 4: Understand the migration files
+
+Open the `InitialMonitoring` files under `backend/UptimeUrpo.Api/Persistence/Migrations` and [the model snapshot](backend/UptimeUrpo.Api/Persistence/Migrations/MonitoringDbContextModelSnapshot.cs). The migration creates tables and indexes, while the snapshot records EF's model for future comparisons.
+
+The snapshot contains schema information, not your database's rows. The migration's `Down` drops tables; it cannot recover deleted history. Review generated changes as carefully as handwritten SQL migrations. Creating a migration and applying one are separate actions.
+
+### Step 5: Follow one scoped save
+
+Open [MonitoringWorker](backend/UptimeUrpo.Api/Monitoring/MonitoringWorker.cs), then [MonitoringStore](backend/UptimeUrpo.Api/Persistence/MonitoringStore.cs). For each observation, the worker creates an async DI scope and resolves the store. The scope gives it a separate `MonitoringDbContext` and disposes it after the operation.
+
+This matters because a context is not thread-safe. Sharing one between parallel HTTP checks would mix tracked entities and concurrent queries. The connection pool can manage reusable database connections underneath; the context itself remains a short-lived unit of work.
+
+### Step 6: See why the save comes before the snapshot update
+
+`MonitoringState.Prepare` calculates the observation and next failure count without publishing them. The store inserts a history row and updates the durable latest snapshot in one `SaveChangesAsync` transaction. Only afterward does `Apply` publish the snapshot used by the API.
+
+If inserting the history fails, the current database snapshot must not advance either. A real database test deliberately supplies a negative duration, triggers the SQL constraint, and verifies that both writes roll back. This is stronger evidence than a fake ORM store that simply accepts any object.
+
+The latest snapshot duplicates a small set of result fields on purpose. It can survive raw-history retention and makes startup restoration simple. Atomic writes keep that duplication consistent.
+
+### Step 7: Run with restricted runtime credentials
+
+```sh
+python3 scripts/dev-db.py run
+```
+
+The helper passes a runtime connection string through the child environment. That role can read/write application data but cannot create schema objects, databases, or roles. The migration role owns schema changes; neither application role is a superuser.
+
+A plain `dotnet run` now needs a valid `ConnectionStrings__Monitoring` supplied separately. Use the helper for this local setup rather than putting a password into committed settings or command history.
+
+### Step 8: Compare liveness and readiness
+
+In another terminal:
+
+```sh
+curl --fail http://127.0.0.1:5080/health
+curl --fail http://127.0.0.1:5080/health/ready
+curl --fail http://127.0.0.1:5080/api/services
+```
+
+Liveness returns `{"status":"ok"}` if the process responds. Readiness returns `{"status":"ready"}` only after storage initialization and a successful schema/database check, with no unresolved last write failure. Otherwise it returns HTTP 503 and `{"status":"not_ready"}` without private diagnostics.
+
+A website returning 500 is a target failure, not a storage failure. If that failed observation is saved correctly, the monitor can still be ready.
+
+### Step 9: Understand restart restoration
+
+Stop the API with Ctrl+C and run it again using the helper. The database and volume remain. Startup synchronizes configuration and restores durable snapshots before scheduling checks. A fresh failure streak survives restart, while old/future-dated observations become UNKNOWN and reset the streak.
+
+UTC completion time bridges process lifetimes. Inside the new process, monotonic elapsed time governs freshness again. The monitor does not pretend it checked continuously while stopped. A new startup check may quickly replace the restored snapshot, so the controlled restart test below is the clearest demonstration of restoration before new work completes.
+
+```sh
+dotnet test tests/UptimeUrpo.IntegrationTests --no-restore --filter FullyQualifiedName~RestartRestoresTheLastObservationBeforeTheNextCheckCompletes
+```
+
+This uses fake HTTP responses and a disposable database. Its second request stays pending so the test can verify the restored snapshot directly.
+
+### Step 10: Preserve configuration history
+
+Changing interval, enabled state, URL, expectation, timeout, or thresholds creates a new configuration period and clears incompatible current state. Renaming a service does not change its identity. Removing a target retires it without deleting history; reintroducing it opens a new period.
+
+This prepares for honest coverage calculations in Part 5. Disabled time is different from missing checks. Periods record changes observed at startup, not an invented exact time for an edit made while stopped. Keep stable IDs for the same service and document material target changes.
+
+### Step 11: Read the LINQ history query and retention
+
+Find `ReadHistoryAsync` in the store. `Where`, ordering, and `Take` form a database query; `ToListAsync` executes it. Filtering happens in PostgreSQL rather than downloading all rows and calling JavaScript-style array filtering afterward. `AsNoTracking` avoids tracking read-only rows.
+
+The method uses `[start, end)` UTC request-start times, newest-first ordering, and a maximum of 1,000 results. It is tested directly; the HTTP history endpoint is Part 5 work.
+
+`RetentionWorker` deletes at most 500 raw rows per minute by default, strictly older than 90 days by completion time. It does not run an unbounded deletion inside an API request. Current snapshots and configuration periods remain; incident retention will be added when incidents exist.
+
+### Step 12: Learn failure behavior safely
+
+Run the database scenarios:
+
+```sh
+dotnet test tests/UptimeUrpo.IntegrationTests --no-restore --filter 'Category=Database'
+```
+
+[The tests](tests/UptimeUrpo.IntegrationTests/DatabaseTests.cs) use a disposable PostgreSQL container, not your local development volume. They verify migrations, runtime DDL denial, history queries, transaction rollback, configuration periods, retention boundaries, restart continuity, and storage failure/recovery.
+
+One test revokes INSERT permission, allows a scheduled attempt, and verifies that no new result is published. Readiness becomes unhealthy. Restoring permission allows the next normally scheduled result to be saved and readiness to recover. There is no unbounded memory queue or fake outage result.
+
+For the fast suite without database containers, use:
+
+```sh
+dotnet test Uptime-Urpo.slnx --no-restore --filter 'Category!=Database'
+```
+
+Those worker/API tests use a test-only store. The actual application has no memory-only persistence fallback. Full database tests fail explicitly when Docker is unavailable rather than silently skipping evidence.
+
+### Step 13: Stop local infrastructure without losing history
+
+After stopping the API:
+
+```sh
+python3 scripts/dev-db.py status
+python3 scripts/dev-db.py down
+```
+
+`down` stops only this Compose project and preserves the volume. Do not add `--volumes` as routine cleanup: removing the database volume destroys local history. Preserve `.local/database.env`, and never commit it, database backups, or real connection strings.
+
+### What was verified
+
+All 138 cases passed: 105 unit cases and 33 integration cases, including nine real PostgreSQL scenarios. A native local run used the restricted runtime role, reported ready, saved one approved owned-target HTTP 200 observation, and shut down gracefully. A SQL count confirmed the saved row afterward. The local database was left running for continued use; no NUC service or deployment was touched.
+
+See [the M3 record](docs/MILESTONE-3.md#verification-record--2026-10-26) for exact limits, package pins, commands, and operational caveats.
+
+### Teach this part
+
+Draw the prepare → save → publish flow, show the entity/context mapping, then run the rollback or restart test. Ask the learner:
+
+- Does assigning an entity property immediately commit SQL? **No; the context tracks the change until saving.**
+- Why separate migration and runtime identities? **Normal monitoring needs data access, not schema-changing privileges.**
+- Why publish after saving? **The API should not advertise an observation that failed to become durable.**
+- Is a model snapshot a database backup? **No; it describes schema, not live rows.**
+- Can retention remove history while the last snapshot remains? **Yes; they are stored separately and the snapshot still ages to UNKNOWN.**
+- What do PostgreSQL tests establish that a fake store cannot? **Actual SQL, transaction, constraint, migration, and permission behavior.**
+
+**What remains:** history/uptime/incident API design, dashboard, and deployment. Part 5 requires approval before implementation.
 
 ## Part 5 — Turn history into a useful read-only API
 

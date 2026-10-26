@@ -1,6 +1,6 @@
 # Milestone 2 — Background monitoring
 
-Status: implemented and locally verified. M3 requires approval before persistence work begins.
+Historical M2 record: implemented and locally verified before M3 approval. The current application now requires PostgreSQL and persists observations. Use [the M3 guide](MILESTONE-3.md) for current run commands and persistence behavior; the in-memory-only descriptions and test counts below document the earlier stage.
 
 ## What changed
 

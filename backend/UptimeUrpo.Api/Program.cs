@@ -1,7 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using UptimeUrpo.Api.Contracts;
 using UptimeUrpo.Api.Monitoring;
+using UptimeUrpo.Api.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,6 +35,19 @@ builder.Services.AddOptions<MonitoringOptions>()
     .ValidateOnStart();
 
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+builder.Services.AddOptions<DatabaseOptions>()
+    .BindConfiguration("Database")
+    .Configure(options => options.ConnectionString = builder.Configuration.GetConnectionString("Monitoring") ?? "")
+    .Validate(options => options.IsValid(), "Configure a valid ConnectionStrings:Monitoring and retention limits; see docs/MILESTONE-3.md.")
+    .ValidateOnStart();
+builder.Services.AddDbContext<MonitoringDbContext>((services, options) => options.UseNpgsql(
+    services.GetRequiredService<IOptions<DatabaseOptions>>().Value.ConnectionString,
+    postgres => postgres.CommandTimeout(5)));
+builder.Services.AddScoped<IMonitoringStore, MonitoringStore>();
+builder.Services.AddSingleton<PersistenceHealth>();
+// Persistence failures are logged by sanitized category at our boundary, not with SQL/host details.
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.None);
+builder.Logging.AddFilter("Npgsql", LogLevel.None);
 builder.Services.AddSingleton<IDnsResolver, SystemDnsResolver>();
 builder.Services.AddSingleton<PublicHttpsConnector>();
 builder.Services.AddHttpClient(HttpChecker.ClientName, client =>
@@ -46,12 +62,33 @@ builder.Services.AddHttpClient(HttpChecker.ClientName, client =>
 builder.Services.AddTransient<HttpChecker>();
 builder.Services.AddSingleton<MonitoringState>();
 builder.Services.AddHostedService<MonitoringWorker>();
+builder.Services.AddHostedService<RetentionWorker>();
 
 var app = builder.Build();
+if (builder.Configuration.GetValue<bool>("migrate"))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    await scope.ServiceProvider.GetRequiredService<MonitoringDbContext>().Database.MigrateAsync();
+    return;
+}
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
 app.MapGet("/health", () => TypedResults.Ok(new HealthResponse("ok")));
+
+app.MapGet("/health/ready", async (IMonitoringStore store, PersistenceHealth health, CancellationToken token) =>
+{
+    try
+    {
+        var ready = health.IsReady && await store.IsSchemaReadyAsync(token);
+        return Results.Json(new HealthResponse(ready ? "ready" : "not_ready"), statusCode: ready ? 200 : 503);
+    }
+    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+    catch
+    {
+        return Results.Json(new HealthResponse("not_ready"), statusCode: 503);
+    }
+});
 
 app.MapGet("/api/services", (MonitoringState state) => TypedResults.Ok(state.GetAll()));
 

@@ -3,9 +3,12 @@ using System.Diagnostics;
 using System.Net;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using UptimeUrpo.Api.Monitoring;
+using UptimeUrpo.Api.Persistence;
+using UptimeUrpo.TestSupport;
 
 namespace UptimeUrpo.UnitTests;
 
@@ -177,10 +180,50 @@ public sealed class MonitoringWorkerTests
         TimeoutSeconds = timeout
     };
 
+    [Fact]
+    public async Task FailedInitializationPreventsChecksUntilStorageRecovers()
+    {
+        await using var harness = new Harness([Target("one")]);
+        harness.Store.FailInitialization = true;
+        await harness.StartAsync();
+        await harness.WaitForDelaysAsync(1, 5);
+        Assert.Equal(0, harness.StartedCount);
+        Assert.False(harness.Health.IsReady);
+        harness.Store.FailInitialization = false;
+        harness.Clock.Advance(TimeSpan.FromSeconds(5));
+        (await harness.NextAsync()).Respond();
+        await harness.WaitForDelaysAsync(1, 60);
+        Assert.True(harness.Health.IsReady);
+        Assert.Single(harness.Store.Saved);
+    }
+
+    [Fact]
+    public async Task FailedWriteLeavesNoPublishedObservationAndNextIntervalCanRecover()
+    {
+        await using var harness = new Harness([Target("one")]);
+        harness.Store.FailWrites = true;
+        await harness.StartAsync();
+        (await harness.NextAsync()).Respond();
+        await harness.WaitForDelaysAsync(1, 60);
+        Assert.Null(harness.State.Get("one")!.LastCheck);
+        Assert.False(harness.Health.IsReady);
+        Assert.Empty(harness.Store.Saved);
+        harness.Store.FailWrites = false;
+        harness.Clock.Advance(TimeSpan.FromSeconds(60));
+        (await harness.NextAsync()).Respond();
+        await harness.WaitForDelaysAsync(2, 60);
+        Assert.True(harness.Health.IsReady);
+        Assert.Equal(HealthStatus.Up, harness.State.Get("one")!.Health);
+        Assert.Single(harness.Store.Saved);
+    }
+
     private sealed class Harness : IAsyncDisposable
     {
         private readonly Channel<Pending> _started = Channel.CreateUnbounded<Pending>();
         private readonly MonitoringWorker _worker;
+        private readonly ServiceProvider _provider;
+        public FakeMonitoringStore Store { get; } = new();
+        public PersistenceHealth Health { get; } = new();
         private int _active;
         private int _maxActive;
         private int _startedCount;
@@ -197,7 +240,9 @@ public sealed class MonitoringWorkerTests
             var options = Options.Create(new MonitoringOptions { Targets = targets, MaxConcurrency = concurrency });
             State = new MonitoringState(options, Clock);
             var checker = new HttpChecker(new ClientFactory(new Handler(SendAsync)), Clock);
-            _worker = new MonitoringWorker(options, checker, State, Clock, NullLogger<MonitoringWorker>.Instance);
+            _provider = new ServiceCollection().AddSingleton<IMonitoringStore>(Store).BuildServiceProvider();
+            _worker = new MonitoringWorker(options, checker, State, Clock, NullLogger<MonitoringWorker>.Instance,
+                _provider.GetRequiredService<IServiceScopeFactory>(), Health);
         }
 
         public Task StartAsync() => _worker.StartAsync(CancellationToken.None);
@@ -230,6 +275,7 @@ public sealed class MonitoringWorkerTests
         {
             await StopAsync();
             _worker.Dispose();
+            await _provider.DisposeAsync();
         }
     }
 

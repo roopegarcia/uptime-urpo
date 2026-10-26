@@ -1,9 +1,13 @@
 using Microsoft.Extensions.Options;
 using UptimeUrpo.Api.Contracts;
+using UptimeUrpo.Api.Persistence;
 
 namespace UptimeUrpo.Api.Monitoring;
 
 public enum HealthStatus { Unknown, Up, Down, Degraded }
+
+public sealed record MonitoringObservation(string ServiceId, CheckResult Result, DateTimeOffset CompletedAtUtc,
+    long CompletedTimestamp, int ConsecutiveFailures);
 
 public sealed class MonitoringState
 {
@@ -17,17 +21,50 @@ public sealed class MonitoringState
         _entries = options.Value.GetTargets().ToDictionary(target => target.Id, target => new Entry(target));
     }
 
-    public void Record(string id, CheckResult result)
+    internal void Record(string id, CheckResult result) => Apply(Prepare(id, result));
+
+    public MonitoringObservation Prepare(string id, CheckResult result)
     {
         lock (_gate)
         {
             var entry = _entries[id];
+            var failures = IsStale(entry) ? 0 : entry.Failures;
+            failures = result.Success ? 0 : Math.Min(failures + 1, entry.Target.FailureThreshold);
+            return new MonitoringObservation(id, result, _time.GetUtcNow(), _time.GetTimestamp(), failures);
+        }
+    }
+
+    public void Apply(MonitoringObservation observation)
+    {
+        lock (_gate)
+        {
+            var entry = _entries[observation.ServiceId];
             if (!entry.Target.Enabled) return;
-            if (IsStale(entry)) entry.Failures = 0;
-            entry.Failures = result.Success ? 0 : Math.Min(entry.Failures + 1, entry.Target.FailureThreshold);
-            entry.LastCheck = result;
-            entry.CompletedAtUtc = _time.GetUtcNow();
-            entry.CompletedTimestamp = _time.GetTimestamp();
+            entry.Failures = observation.ConsecutiveFailures;
+            entry.LastCheck = observation.Result;
+            entry.CompletedAtUtc = observation.CompletedAtUtc;
+            entry.CompletedTimestamp = observation.CompletedTimestamp;
+        }
+    }
+
+    public void Restore(IReadOnlyList<PersistedSnapshot> snapshots)
+    {
+        lock (_gate)
+        {
+            foreach (var snapshot in snapshots)
+            {
+                if (!_entries.TryGetValue(snapshot.ServiceId, out var entry)) continue;
+                entry.LastCheck = snapshot.Result;
+                entry.CompletedAtUtc = snapshot.CompletedAtUtc;
+                entry.CompletedTimestamp = null;
+                entry.Failures = 0;
+                if (snapshot.Result is null || snapshot.CompletedAtUtc is null) continue;
+                var age = _time.GetUtcNow() - snapshot.CompletedAtUtc.Value;
+                // UTC bridges process lifetimes; future/old observations restart as UNKNOWN.
+                if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(2 * entry.Target.IntervalSeconds)) continue;
+                entry.CompletedTimestamp = _time.GetTimestamp() - (long)(age.TotalSeconds * _time.TimestampFrequency);
+                entry.Failures = Math.Min(snapshot.ConsecutiveFailures, entry.Target.FailureThreshold);
+            }
         }
     }
 

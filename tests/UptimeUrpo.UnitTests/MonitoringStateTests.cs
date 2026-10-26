@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using UptimeUrpo.Api.Monitoring;
+using UptimeUrpo.Api.Persistence;
 
 namespace UptimeUrpo.UnitTests;
 
@@ -113,6 +114,16 @@ public sealed class MonitoringStateTests
     private static CheckResult Result(bool success, double duration = 10) =>
         new(DateTimeOffset.UtcNow, duration, success ? 200 : 503, success,
             success ? null : FailureCategory.UnexpectedStatus);
+
+    [Fact]
+    public void RestoringAFutureTimestampKeepsTheObservationButMarksItUnknown()
+    {
+        var (state, clock) = CreateState();
+        state.Restore([new PersistedSnapshot("enabled", Result(success: false), clock.GetUtcNow().AddMinutes(1), 3)]);
+        Assert.Equal(HealthStatus.Unknown, state.Get("enabled")!.Health);
+        Assert.NotNull(state.Get("enabled")!.LastCheck);
+        Assert.Equal(0, state.Get("enabled")!.ConsecutiveFailures);
+    }
 
     private static (MonitoringState State, FakeTimeProvider Clock) CreateState(FakeTimeProvider? clock = null)
     {

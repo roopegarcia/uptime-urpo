@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="../TestSupport/FakeMonitoringStore.cs" Link="TestSupport/FakeMonitoringStore.cs" />
   </ItemGroup>
 
   <ItemGroup>
