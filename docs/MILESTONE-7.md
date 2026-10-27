@@ -1,6 +1,6 @@
 # Milestone 7 — CI and delivery reliability
 
-Status on 2026-10-27: implemented and locally verified; GitHub-hosted validation and manual candidate preparation passed; the first promotion exposed an image-identity portability bug. The fix is locally verified and awaits a new pushed candidate. M7 is not yet fully accepted. Production remains the verified M6 release `8b69d7e6e21c`.
+Status on 2026-10-27: delivery verified; a test-harness follow-up is locally verified and awaits hosted validation. Hosted validation, manual preparation, verified artifact promotion, NUC readiness/history/access checks, and separate-database recovery passed. Production now runs `7ba440656009de8616b2e85d351d4b46531c42f9`. M7 final acceptance awaits that follow-up hosted run. Optional M8 has not started.
 
 ## Chosen delivery boundary
 
@@ -39,7 +39,24 @@ The first promotion stopped on the Mac before SSH/release operations: the runner
 
 Three regression tests cover classic/OCI archive wrappers, changed runtime/layer identities, and unsafe metadata members. The exact hosted archive and its loaded Mac image both produced config digest `sha256:0f2eabaa9fce55b633fbdb6d2bf912d5c3d5a9dfe201c2b590d4d355650987b0`. The staged NUC image produced that same config digest after SSH transfer. Staging did not start it or change the live release: `current` still points to `8b69d7e6e21c`, and origin readiness returned `200 {"status":"ready"}`.
 
-Pending evidence: hosted execution of the corrected candidate and successful operator-side promotion. GitHub rules requiring checks before merge are repository settings and have not been claimed configured. See [the CI guide](CI-AND-DELIVERY.md).
+## Hosted delivery and NUC verification — 2026-10-27
+
+Corrected manual [preparation run 40523094085](https://github.com/roopegarcia/uptime-urpo/actions/runs/40523094085), attempt 1, passed all four hosted jobs at `7ba440656009de8616b2e85d351d4b46531c42f9`: backend/PostgreSQL, frontend, release/recovery tools, and AMD64 image/recovery. The same 248 test cases passed; the runner also exercised the real failed-release, compatible rollback, schema-mismatch refusal, and earlier-backup recovery scenarios.
+
+Artifact `12743370532` has ZIP SHA-256 `b71d30ae50cff9f72d01bf5dcc9ce0c061f5129f364a3d76e932f45ca5df5c32`. Its schema-2 manifest records image config digest `sha256:798bd909d97a95bee19d55f5789ebce1838d50d4ce28ddc55f01467534397f15`. Authenticated CLI download and the complete `from-actions` → isolated candidate worktree → `from-artifact` → publisher path succeeded without rebuilding. The received NUC digest matched before backup/migration. The operator performed Git pushes; the agent dispatched preparation and performed the already-authorized SSH promotion.
+
+```sh
+./deploy/from-actions --repository roopegarcia/uptime-urpo --run-id 40523094085 --host roope@nuc --directory /home/roope/apps/uptime-urpo --port 8108
+```
+
+- Current source link, recorded settings, and running app identify the candidate commit. Both containers are healthy; database-aware readiness returns HTTP 200.
+- The app runs as `app` with a read-only filesystem; port 8108 binds only to loopback. PostgreSQL runs as `postgres`, has a read-only root filesystem and no published port. A direct LAN connection to the known origin port remained blocked. No access-layer policy was changed.
+- The private runtime configuration checksum was unchanged. Before promotion, 209 checks were present; afterward, 213 were present, including the original check ID 1. The one service, one monitoring period, two migrations, and zero incidents were preserved. The first post-release check returned HTTP 200 and UP.
+- The locked release validated backup `20261027T144300Z-0bd9d872.dump` before migration, containing 212 checks. A separate disposable restore recovered exactly those 212 checks while the live database kept 213. Only the generated restore database was dropped; the live database was not replaced.
+- A new owner-only off-host recovery archive was copied to ignored `.local/nuc-backups/`. Its five backup checksums and recovery configuration were verified without printing credentials. Off-host replication remains manual.
+- Chrome loaded the deployed overview and service detail through the existing SSH tunnel, including history and the empty incident panel. The UI showed 100% observed availability and one missing monitoring opportunity, reporting the gap separately through coverage. No synthetic success was inserted for deployment downtime. Physical-device testing was not performed.
+
+Repository rules requiring checks before merge are not configured or claimed. Artifact promotion independently requires a successful manual run. Full host reboot, unattended backup execution, full main-database replacement, and long-term operational reliability remain outside this evidence. See [the CI guide](CI-AND-DELIVERY.md) and [M6 limits](MILESTONE-6.md).
 
 ## Reproduce
 
@@ -51,3 +68,9 @@ python3 deploy/recovery-drill.py --image uptime-urpo:validation
 Docker and a free test port 18081 are required. The first command includes an AMD64 build; Apple Silicon uses emulation when probing that runtime. The dedicated recovery script always creates a fresh, synthetic project and never accepts a production state path.
 
 The new migration CLI and guarded rollback are in M7 images. M6 images do not implement that metadata command; the automated rollback tool refuses an image without usable metadata. Full database replacement, destructive migration reversal, semantic compatibility of arbitrary older code, and independent power/network observation remain separately reviewed concerns.
+
+## Push-run test-host follow-up
+
+The separate [push Validation run 40523056923](https://github.com/roopegarcia/uptime-urpo/actions/runs/40523056923) at the same deployed commit failed two invalid-configuration test rows; its dependent image job was skipped. The successful manual run above independently ran all validation gates before packaging. The failure was a deferred `WebApplicationFactory` startup race: invalid options failed startup, but host disposal sometimes masked the original validation exception with `ObjectDisposedException`. The [upstream ASP.NET Core report/fix](https://github.com/dotnet/aspnetcore/pull/69685) describes that ordering; no preview package or upstream patch is introduced here.
+
+The test now captures the actual host-logged `OptionsValidationException` and asserts its options type is `MonitoringOptions`, asserts startup fails with either the original exception or the known disposal wrapper, and verifies zero outbound checks. It cannot pass on a disposal exception alone. This changes only test observation, not runtime validation. After the fix, the full local backend gate passed: Release build, formatting, 144 unit tests, 25 fast integration tests, and 30 disposable PostgreSQL tests. All 24 operations checks passed. Twenty consecutive runs of the eleven invalid-configuration rows passed (220 repeated cases). These repetitions are stress evidence, not additional unique tests. The follow-up still requires a push/hosted result before final M7 acceptance.

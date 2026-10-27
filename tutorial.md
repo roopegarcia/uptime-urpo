@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–7 are complete. Part 8 has passed hosted validation and candidate preparation; a delivery portability fix awaits a new candidate. Part 9 is planned. The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
+Each part corresponds to one milestone. **Parts 1–7 are complete. Part 8 delivery is verified; a startup-test follow-up awaits hosted validation. Part 9 is optional and planned.** The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -1135,13 +1135,13 @@ Demonstrate the SSH-forwarded dashboard, then explain the Dockerfile stages, dat
 
 ## Part 8 — Automate checks and delivery
 
-**Milestone 7 · Implemented and locally verified; hosted execution pending**
+**Milestone 7 · Private artifact deployment verified; test-harness follow-up pending hosted validation**
 
 ### What we built
 
 We added GitHub Actions validation, a manually triggered deployment-preparation workflow, exact-artifact delivery from the Mac, guarded image rollback, and an isolated failure/recovery exercise. GitHub receives no NUC credential or production target configuration. The operator chose hosted CI with Mac-side SSH deployment, keeping the private network boundary from Part 7.
 
-Hosted validation and manual preparation passed; the first promotion stopped safely on an image-identity mismatch. A corrected candidate and successful promotion still need their own evidence. [The M7 record](docs/MILESTONE-7.md) tracks that distinction. The running NUC image remains the verified M6 release until explicitly promoted.
+Hosted validation, manual preparation, and corrected artifact promotion passed. The NUC runs commit `7ba4406`. [The M7 record](docs/MILESTONE-7.md) records the run, hashes, preserved history, private access, and recovery evidence.
 
 ### What you need first
 
@@ -1230,7 +1230,11 @@ Keep the damaged/current state, restore into a separate database, validate data/
 
 Locally: 199 backend, 25 frontend, and 24 operations/artifact/gate tests pass. Workflow linting, Release/frontend builds, and a real isolated failed-release/rollback/recovery drill pass. A deliberately failing validation command stopped before build; failed-run/artifact inputs were rejected before delivery.
 
-Clean-checkout validation, hosted Ubuntu validation, manual preparation, and verified artifact download passed. The first promotion stopped before changing the NUC because Docker stores reported different wrapper IDs. The fix uses the saved config digest; regression tests prove that wrappers can differ while runtime/layer identity stays constant. A corrected hosted candidate and successful promotion remain pending, along with any repository rule configuration. See [M7](docs/MILESTONE-7.md) for later evidence. These are distinct from the already deployed M6 baseline.
+Clean-checkout validation, hosted Ubuntu validation, manual preparation, and verified artifact download passed. The first promotion stopped before changing the NUC because Docker stores reported different wrapper IDs. The fix uses the saved config digest; regression tests prove that wrappers can differ while runtime/layer identity stays constant. The corrected [manual run 40523094085](https://github.com/roopegarcia/uptime-urpo/actions/runs/40523094085) passed all four hosted jobs and produced the schema-2 candidate for `7ba4406`. CLI artifact download, ZIP/content checks, and exact-image promotion to the NUC passed. The app stayed private, runtime configuration was preserved, and check ID 1 survived with 213 checks present after release. The first new check returned HTTP 200.
+
+The production release backup contained 212 checks. Restoring it into a separate disposable database recovered 212 while the live database retained 213: a concrete example of why an earlier backup omits later data. The deployed overview, history chart, and empty incident state loaded through the SSH tunnel. Coverage reported one missing opportunity separately from 100% observed availability. See [M7](docs/MILESTONE-7.md) for exact hashes and limits. Repository merge rules remain unconfigured.
+
+The separate push run at that same commit exposed a test-host timing race. A failed application's provider could be disposed before `WebApplicationFactory` surfaced the options exception. The follow-up test observes the original host log, requires a `MonitoringOptions` validation error, requires failed startup, and requires zero outbound checks. Allowing the known wrapper without requiring the original validation failure would hide defects. This test-only follow-up still awaits hosted validation; the live image remains the successfully prepared candidate.
 
 ### Teach this part
 
@@ -1242,8 +1246,9 @@ Demonstrate a validation run, its dependent image job, a manual preparation, its
 4. Why does the schema CLI avoid host startup? **A metadata probe must not start another monitor or need production credentials.**
 5. What does a restored one-check database omit? **The second observation saved after that backup.**
 6. Does workflow YAML prove branch protection? **No. Repository rules require their own configuration and verification.**
+7. Why observe the original startup validation error? **A test host wrapper can fail during cleanup; checking the original error and zero outbound requests proves the intended boundary was enforced.**
 
-**What remains:** finish hosted evidence for this milestone. Optional Part 9 requires a separate reviewed Azure plan and approval before paid provisioning.
+**What remains:** repository merge rules, automatic off-host replication, full database replacement, and long-term operational evidence have their own limits; CI does not prove them. Optional Part 9 requires a separate reviewed Azure plan and approval before paid provisioning.
 
 ## Part 9 — Explore Azure and Infrastructure as Code
 

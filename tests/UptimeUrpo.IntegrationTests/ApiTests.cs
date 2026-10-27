@@ -187,7 +187,13 @@ public sealed class ApiTests
     public void InvalidConfigurationFailsBeforeChecking(string field)
     {
         using var factory = new ApiFactory(invalidField: field);
-        Assert.Throws<OptionsValidationException>(() => factory.CreateClient());
+        // The deferred test host can dispose its provider before surfacing the startup error.
+        // Assert the actual host validation failure as well as failed startup and no checks.
+        var startupError = Record.Exception(() => factory.CreateClient());
+        Assert.True(startupError is OptionsValidationException or ObjectDisposedException,
+            $"Unexpected startup error: {startupError}");
+        var validation = Assert.IsType<OptionsValidationException>(factory.StartupValidationFailure);
+        Assert.Equal(typeof(MonitoringOptions), validation.OptionsType);
         Assert.Equal(0, factory.Handler.Calls);
     }
 
@@ -234,6 +240,7 @@ public sealed class ApiTests
         public RecordingHandler Handler { get; } = new(status, networkFailure, blockRequest);
         public ObservingClock Clock { get; } = new();
         public FakeMonitoringStore Store { get; } = new();
+        public OptionsValidationException? StartupValidationFailure { get; private set; }
 
         public async Task WaitForIntervalsAsync(int count)
         {
@@ -248,7 +255,14 @@ public sealed class ApiTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Testing");
-            builder.ConfigureLogging(logging => logging.ClearProviders());
+            builder.ConfigureLogging(logging =>
+            {
+                logging.ClearProviders();
+                if (invalidField is not null)
+                {
+                    logging.AddProvider(new StartupValidationLogger(error => StartupValidationFailure = error));
+                }
+            });
             builder.ConfigureTestServices(services =>
             {
                 foreach (var descriptor in services.Where(service => service.ServiceType == typeof(IHostedService)
@@ -290,6 +304,20 @@ public sealed class ApiTests
                 });
                 services.AddHttpClient(HttpChecker.ClientName).ConfigurePrimaryHttpMessageHandler(() => Handler);
             });
+        }
+    }
+
+    // Observe the original startup error before app.Run disposes a failed host.
+    private sealed class StartupValidationLogger(Action<OptionsValidationException> capture) : ILoggerProvider, ILogger
+    {
+        public ILogger CreateLogger(string categoryName) => this;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public void Dispose() { }
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (exception is OptionsValidationException validation) capture(validation);
         }
     }
 

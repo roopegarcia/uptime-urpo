@@ -4,7 +4,7 @@ A C#/.NET learning and portfolio project building a private, self-hosted uptime 
 
 ## Current status
 
-**Milestone 6 complete: privately deployed on the NUC.** The application serves its dashboard/API in one non-root container alongside an isolated PostgreSQL container. Backup-before-migration releases, daily backup scheduling, a separate-database restore drill, restart continuity, and SSH-only access are implemented and verified. See [M6 evidence](docs/MILESTONE-6.md) and [deployment/recovery commands](docs/DEPLOYMENT.md).
+**Milestone 7 delivery verified: GitHub-validated artifact on the private NUC.** The application serves its dashboard/API in one non-root container alongside an isolated PostgreSQL container. Backup-before-migration releases, daily backup scheduling, a separate-database restore drill, restart continuity, and SSH-only access are implemented and verified. The current image is `7ba4406`, promoted from the verified GitHub artifact. See [M7 evidence](docs/MILESTONE-7.md), [M6 operations](docs/MILESTONE-6.md), and [deployment/recovery commands](docs/DEPLOYMENT.md).
 
 To open the deployed dashboard, keep an SSH tunnel running:
 
@@ -14,7 +14,7 @@ ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc
 
 Open **http://127.0.0.1:5081/**. This uses the NUC application; Vite and a local API are unnecessary. The existing SSH alias needs the explicit `roope` account. No public hostname or Cloudflare rule was added. Daily backup scheduling is installed; off-host copies are currently manual.
 
-M7 hosted validation and manual candidate preparation passed. The first promotion stopped safely before changing the NUC; a fix for Docker image-identity differences is locally verified and awaits a new candidate. The selected route keeps CI on GitHub and deployment on this Mac over SSH. See [CI and delivery](docs/CI-AND-DELIVERY.md) and [M7 evidence](docs/MILESTONE-7.md). [The roadmap](docs/ROADMAP.md) keeps later work distinct.
+Manual hosted validation, candidate preparation, exact-artifact promotion, history continuity, private access, and a restore of the new backup into a separate database all passed. A separate push run exposed a startup-test race; its test-only fix awaits a fresh hosted result before final M7 acceptance. The selected route keeps CI on GitHub and deployment on this Mac over SSH. See [CI and delivery](docs/CI-AND-DELIVERY.md) and [M7 evidence](docs/MILESTONE-7.md). [The roadmap](docs/ROADMAP.md) keeps later work distinct.
 
 ## Application
 
@@ -22,11 +22,11 @@ One ASP.NET Core application hosts a read-only API and background HTTP checker. 
 
 The first deployment is private through an authenticated SSH tunnel. Targets are defined in private operator configuration; there are no public URL submission or administration endpoints. The production application serves the frontend and API from the same origin.
 
-The selected stack is .NET 10 LTS / C# 14, ASP.NET Core Minimal APIs, EF Core 10 with Npgsql 10, PostgreSQL 18, and React / TypeScript / Vite. Testing will use xUnit, ASP.NET Core integration testing, and disposable PostgreSQL containers. Exact package versions will be verified when their milestone introduces them.
+The selected stack is .NET 10 LTS / C# 14, ASP.NET Core Minimal APIs, EF Core 10 with Npgsql 10, PostgreSQL 18, and React / TypeScript / Vite. Tests use xUnit, ASP.NET Core integration testing, and disposable PostgreSQL containers. Package versions and container digests are pinned in the repository.
 
 ## Start here
 
-For a walkthrough you can also use to teach the project, read [the tutorial](tutorial.md): Parts 1–4 cover the API, worker, and persistence; Part 5 follows query contracts, coverage, and incidents; Part 6 builds the dashboard; Part 7 deploys it privately and teaches backup/recovery.
+For a walkthrough you can also use to teach the project, read [the tutorial](tutorial.md): Parts 1–4 cover the API, worker, and persistence; Part 5 follows query contracts, coverage, and incidents; Part 6 builds the dashboard; Part 7 deploys it privately and teaches backup/recovery; Part 8 adds hosted validation, verified delivery, and recovery gates.
 
 1. Follow [local development setup](docs/LOCAL-DEVELOPMENT.md).
 2. Read [architecture and operational decisions](docs/ARCHITECTURE.md).

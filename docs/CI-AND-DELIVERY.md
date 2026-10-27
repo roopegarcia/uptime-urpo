@@ -58,7 +58,7 @@ Replace RUN_ID with the successful preparation run's numeric ID:
 
 The candidate commit must exist in the local repository. Fetch origin if necessary; the helper creates a detached worktree at that commit without changing your current branch. It removes the worktree without force afterward; unexpected edits are preserved. Candidate downloads remain private under ignored .local/ci-downloads.
 
-For a browser-downloaded ZIP, add `--archive /absolute/path/to/deployment.zip`. The repository/run/attempt/ZIP digest checks remain mandatory. The helper imports the verified image locally and checks its ID, AMD64 architecture, source label and schema metadata. It then uses the existing publisher's remote preflight/lock, source/image transfer, received-image identity check, backup before migration, readiness, and current-link switch. Existing production target/secrets configuration is preserved. No build runs on the Mac or NUC during this promotion.
+For a browser-downloaded ZIP, add `--archive /absolute/path/to/deployment.zip`. The repository/run/attempt/ZIP digest checks remain mandatory. The helper imports the verified image locally and checks its config digest, AMD64 architecture, source label and schema metadata. It then uses the existing publisher's remote preflight/lock, source/image transfer, received-image identity check, backup before migration, readiness, and current-link switch. Existing production target/secrets configuration is preserved. No build runs on the Mac or NUC during this promotion.
 
 Keep prior image/source releases and backups. Seven-day GitHub artifact retention is not a long-term recovery store. Promotion requires the live GitHub run/artifact records to remain available; expired candidates require a fresh preparation. The retained local-image rollback path is independent of artifact download.
 
@@ -87,3 +87,7 @@ If schemas differ, preserve current state and stop for a reviewed recovery plan.
 ## Verification limits
 
 Local tests, syntax checks, a clean-checkout reproduction, an actual GitHub run, artifact promotion, application rollback, and full database replacement are separate evidence. Record run URLs and the running image/source commit when performed. Do not label file creation or a local script as a successful hosted CI/deployment run. See [M7's dated record](MILESTONE-7.md) and [M6's deployed baseline](MILESTONE-6.md).
+
+## Verified delivery example — 2026-10-27
+
+[Manual run 40523094085](https://github.com/roopegarcia/uptime-urpo/actions/runs/40523094085) passed validation/recovery and supplied the exact `7ba4406` image promoted through `from-actions` to the private NUC. Source/config-digest checks, backup-before-migration, readiness, preserved observations, SSH-only browser access, and separate-database restoration of that backup passed. [M7 records the detailed evidence and remaining limits](MILESTONE-7.md#hosted-delivery-and-nuc-verification--2026-10-27). This is historical evidence, not a promise that the seven-day artifact remains downloadable later.
