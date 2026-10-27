@@ -1,6 +1,6 @@
 # Architecture and decisions
 
-Status: accepted design direction for incremental implementation. M0–M3 are complete. The current application implements recurring checks, bounded concurrency, durable PostgreSQL results/snapshots, configuration periods, retention, safe list/detail snapshots, liveness/readiness, and the outbound security boundary. Incidents, uptime statistics, history HTTP API, dashboard, and deployment remain **planned**. See [the current M3 interface and evidence](MILESTONE-3.md).
+Status: accepted design direction for incremental implementation. M0–M4 are complete. The application implements secure monitoring, PostgreSQL results/snapshots/configuration/incidents, retention, observed availability/coverage, bounded read APIs, liveness/readiness, and OpenAPI. Dashboard and deployment remain **planned**. See [the current M4 contract and evidence](MILESTONE-4.md).
 
 ## System shape
 
@@ -80,7 +80,7 @@ Unexpected HTTP status, DNS failure, connection failure, timeout, and TLS failur
 
 ## Persistence and observed availability
 
-M3 introduces `MonitoredService`, `MonitoringPeriod`, and `CheckRecord`, with an index on `(ServiceId, CheckedAtUtc)` and a completion-time index for retention. Results include UTC request-start/completion, duration, nullable HTTP status, success/failure, and failure category. A result and the current snapshot/failure streak are saved atomically before the cache is updated. Incident entities/transitions arrive in M4, where their writes must join the same transaction.
+M3 introduced `MonitoredService`, `MonitoringPeriod`, and `CheckRecord`, with an index on `(ServiceId, CheckedAtUtc)` and a completion-time retention index. M4 adds `IncidentRecord` and a durable pending first-failure time. Results, current snapshots/streaks, and incident transitions share one transaction before the cache is updated. The unique partial incident index permits one open incident per service.
 
 The background worker opens a separate DI scope/context per operation. Startup requires an explicitly migrated schema, synchronizes configuration periods, and restores durable snapshots; UTC age bridges restart, then in-process freshness uses monotonic time again. Missing/unreachable storage leaves readiness unhealthy and delays initialization; write failures discard the unsaved observation and retain gaps without an unbounded queue. The application has no runtime in-memory persistence mode. Test-only stores keep fast unit/API tests independent of Docker.
 
@@ -91,10 +91,10 @@ For UTC windows `[start, end)` of 24 hours, seven days, and 30 days:
 - **Observed availability:** successful completed checks divided by all completed checks, multiplied by 100.
 - Slow expected responses count as successful; any failed check counts as unsuccessful even before DOWN is confirmed.
 - No completed checks yields a null percentage, never 100%.
-- **Coverage:** observed scheduled opportunities divided by expected opportunities during enabled configuration periods. Assign results to scheduled opportunities so multiple observations cannot inflate coverage; finalize the opportunity mapping and boundary cases with the M4 calculation tests.
+- **Coverage:** occupied nominal slots divided by slots intersecting enabled time. Slots use each configuration period's interval/start anchor; partial window edges count once, and repeated checks in a slot cannot inflate coverage. Disabled/pre-enrollment time contributes no slots. This is sampling density, not a time-weighted SLA; fixed-delay drift can leave nominal slots unoccupied. M4 tests cover mapping and boundaries.
 - Missing opportunities are unknown, excluded from the availability denominator, and displayed as chart gaps. These are sample-based statistics, not time-weighted SLA measurements.
 
-M3 retains raw check results for 90 days, using at most 500 deletes per minute by default. Current durable snapshots and configuration periods are retained separately. Future M4 incident policy: retain closed incidents for 365 days and never expire an open incident. At five targets and roughly one check per minute, raw results grow by about 7,200 rows/day or 648,000 rows over 90 days; an indexed PostgreSQL table is sufficient initially.
+Raw check results retain 90 days, using at most 500 deletes per minute by default. Current durable snapshots/configuration periods remain separate. M4 retains closed incidents for 365 days by end time and never expires open incidents, using another bounded batch. At five targets and roughly one check per minute, raw results grow by about 7,200 rows/day or 648,000 over 90 days; no large-data throughput benchmark has been performed.
 
 Database unavailability must not create fabricated history or an unbounded queue. Log sanitized persistence failures, mark readiness unhealthy, and retain gaps after recovery. Recovery of the monitor must not be presented as recovery of a target without a confirming check.
 
@@ -104,13 +104,14 @@ Milestone 1 introduces `/health` and `GET /api/services/{id}` for the single con
 
 - `GET /api/services`: safe service summaries.
 - `GET /api/services/{id}`: current detail, or 404 for an unknown ID.
+- `GET /api/services/{id}/statistics`: fixed availability/coverage windows and current incident.
 - `GET /api/services/{id}/history`: bounded time range, aggregated chart data, and explicit gaps.
 - `GET /api/services/{id}/incidents`: paginated incident history.
 - `GET /api/overview`: overall counts, freshness, and availability/coverage windows.
 - `GET /health`: process liveness; target failures do not fail it.
 - `GET /health/ready`: readiness; includes database access once persistence is introduced. No sensitive diagnostics in the response.
 
-Use DTOs rather than EF entities, UTC ISO-8601 timestamps, explicit health values, bounded queries, validation, appropriate status codes, Problem Details, and OpenAPI. Request cancellation reaches queries. Final query parameter names, result limits, and aggregation buckets are locked in the M4 plan, not invented in M0.
+M4 uses explicit DTOs, offset-bearing ISO-8601 query timestamps normalized to UTC, bounded parameterized SQL aggregates, Problem Details, and OpenAPI JSON. History returns at most 1,000 buckets over a maximum 30-day range inside retention; incidents use ID cursors and pages of 1–100. Read transactions use repeatable-read isolation. Analytics routes permit at most four concurrent requests and 60 per minute, with no queue. Cancellation reaches SQL. Exact contracts and limits are in the M4 guide.
 
 No CRUD, public check-trigger endpoint, URL submission, or authentication subsystem is needed initially. Keep frontend and API on one origin in production; the local Vite proxy avoids unnecessary permissive CORS.
 
@@ -139,6 +140,8 @@ Production packaging must include health checks, graceful termination, restart p
 Self-monitoring on the NUC cannot independently detect NUC power/network loss or the monitor's own failure. Missing data is visible uncertainty. Origin checks, access-layer checks, deployment checks, restart checks, and restore checks are separate evidence. An external observer is a future complement, not a promise of the initial implementation.
 
 ## Version and design references
+
+M4 adds Microsoft.AspNetCore.OpenApi 10.0.14, using built-in rate limiters and parameterized EF `SqlQuery` for PostgreSQL aggregates. No UI, cache service, or new infrastructure was added. Local migration now makes a private logical backup first; production backup/restore remains a separate M6 responsibility.
 
 M3 pins EF Core/Relational/Design and `dotnet-ef` to 10.0.14, Npgsql EF provider to 10.0.3, and Testcontainers.PostgreSql to 4.16.0. PostgreSQL 18.6 is used locally and in disposable tests. Explicit EF relational pins align assembly patch versions across project references. Tests, not version-number similarity alone, establish compatibility. Migrations run explicitly with the schema owner, while the runtime uses a restricted role.
 

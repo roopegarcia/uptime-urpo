@@ -36,7 +36,7 @@ public sealed class DatabaseTests(PostgresFixture fixture)
         var database = await fixture.CreateDatabaseAsync(migrate: false);
         await using (var migration = database.MigrationContext())
         {
-            Assert.Single(await migration.Database.GetPendingMigrationsAsync());
+            Assert.NotEmpty(await migration.Database.GetPendingMigrationsAsync());
             await migration.Database.MigrateAsync();
             await migration.Database.MigrateAsync();
             Assert.Empty(await migration.Database.GetPendingMigrationsAsync());

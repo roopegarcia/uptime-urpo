@@ -1,10 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using UptimeUrpo.Api.Contracts;
 using UptimeUrpo.Api.Monitoring;
 using UptimeUrpo.Api.Persistence;
+using UptimeUrpo.Api.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,6 +28,29 @@ builder.Services.ConfigureHttpJsonOptions(options =>
         new JsonStringEnumConverter<FailureCategory>(JsonNamingPolicy.SnakeCaseLower));
     options.SerializerOptions.Converters.Add(
         new JsonStringEnumConverter<HealthStatus>(JsonNamingPolicy.SnakeCaseUpper));
+    options.SerializerOptions.Converters.Add(
+        new JsonStringEnumConverter<IncidentResolution>(JsonNamingPolicy.SnakeCaseLower));
+});
+builder.Services.AddOpenApi(options => options.AddDocumentTransformer((document, _, _) =>
+{
+    document.Info.Title = "Uptime-Urpo monitoring API";
+    document.Info.Version = "v1";
+    document.Info.Description = "Private read-only monitoring API. Availability is sample-based; coverage is reported separately. No target URLs or infrastructure credentials are exposed.";
+    return Task.CompletedTask;
+}));
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("database-reads", _ => RateLimitPartition.Get("shared", _ => RateLimiter.CreateChained(
+        new ConcurrencyLimiter(new ConcurrencyLimiterOptions { PermitLimit = 4, QueueLimit = 0 }),
+        new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }))));
+    options.OnRejected = async (context, _) =>
+        await Results.Problem(statusCode: 429, title: "Monitoring read limit exceeded").ExecuteAsync(context.HttpContext);
 });
 
 builder.Services.AddOptions<MonitoringOptions>()
@@ -44,6 +69,7 @@ builder.Services.AddDbContext<MonitoringDbContext>((services, options) => option
     services.GetRequiredService<IOptions<DatabaseOptions>>().Value.ConnectionString,
     postgres => postgres.CommandTimeout(5)));
 builder.Services.AddScoped<IMonitoringStore, MonitoringStore>();
+builder.Services.AddScoped<MonitoringQueries>();
 builder.Services.AddSingleton<PersistenceHealth>();
 // Persistence failures are logged by sanitized category at our boundary, not with SQL/host details.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.None);
@@ -73,8 +99,11 @@ if (builder.Configuration.GetValue<bool>("migrate"))
 }
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseRateLimiter();
+app.MapOpenApi();
+app.MapMonitoringQueries();
 
-app.MapGet("/health", () => TypedResults.Ok(new HealthResponse("ok")));
+app.MapGet("/health", () => TypedResults.Ok(new HealthResponse("ok"))).WithSummary("Application liveness; target failures do not fail it.");
 
 app.MapGet("/health/ready", async (IMonitoringStore store, PersistenceHealth health, CancellationToken token) =>
 {
@@ -88,9 +117,10 @@ app.MapGet("/health/ready", async (IMonitoringStore store, PersistenceHealth hea
     {
         return Results.Json(new HealthResponse("not_ready"), statusCode: 503);
     }
-});
+}).Produces<HealthResponse>().Produces<HealthResponse>(503).WithSummary("Database-aware readiness without private diagnostics.");
 
-app.MapGet("/api/services", (MonitoringState state) => TypedResults.Ok(state.GetAll()));
+app.MapGet("/api/services", (MonitoringState state) => TypedResults.Ok(state.GetAll()))
+    .WithSummary("Safe current snapshots for configured services; disabled entries are included.");
 
 app.MapGet("/api/services/{id}", (string id, MonitoringState state) =>
 {
@@ -98,7 +128,7 @@ app.MapGet("/api/services/{id}", (string id, MonitoringState state) =>
     return service is not null
         ? Results.Ok(service)
         : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Service not found");
-});
+}).Produces<ServiceResponse>().ProducesProblem(404).WithSummary("A cached service snapshot; reads do not trigger checks.");
 
 app.Run();
 

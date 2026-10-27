@@ -291,6 +291,8 @@ Follow [tutorial Part 3](tutorial.md#part-3--run-checks-in-the-background) for a
 
 ## Milestone 3 — Entities, contexts, and transactions
 
+This section records M3's persistence foundation. M4 adds incidents to the same write transaction and exposes read-side aggregation; see the following section for current API concepts.
+
 ### Entity classes map to SQL tables
 
 Read [the entity classes](backend/UptimeUrpo.Api/Persistence/Entities.cs). `MonitoredService`, `MonitoringPeriod`, and `CheckRecord` are ordinary C# classes with properties. EF Core's model maps those properties to columns and identifies primary/foreign keys.
@@ -368,9 +370,79 @@ Liveness still asks whether the API process responds. Readiness now asks whether
 
 Follow [tutorial Part 4](tutorial.md#part-4--keep-monitoring-history-in-postgresql) and [the M3 run/verification guide](docs/MILESTONE-3.md).
 
+## Milestone 4 — Query contracts and durable incidents
+
+### Records define the response contract
+
+Read [MonitoringResponses](backend/UptimeUrpo.Api/Contracts/MonitoringResponses.cs). Records such as `AvailabilityWindow`, `HistoryPoint`, and `IncidentPage` describe the JSON shape explicitly. `double?` permits an unknown percentage or absent HTTP timing; absence must not turn into zero or 100%. Entity URLs never become response fields.
+
+This is similar to defining a TypeScript response type, but the C# record is also the runtime object serialized by ASP.NET Core. Its property names become camel-case JSON through the configured serializer. `IncidentResolution?` becomes null for open incidents or a safe enum string such as `configuration_changed` for an ended one.
+
+### Minimal API binding and the `Try` pattern
+
+[MonitoringEndpoints](backend/UptimeUrpo.Api/Endpoints/MonitoringEndpoints.cs) maps read routes. `[AsParameters]` groups query values into a class; `[FromQuery(Name = "from")]` declares the wire name explicitly. Route ID, DI services, and the request cancellation token are bound separately.
+
+[QueryParameters](backend/UptimeUrpo.Api/Endpoints/QueryParameters.cs) validates raw strings using `TryResolve` and `out` parameters. Like `int.TryParse`, it returns a success flag and outputs either the resolved values or validation errors. Invalid client input is an expected result, not a programming exception.
+
+Explicit culture/offset handling prevents the machine's locale from interpreting a date differently. Retention/range/page/bucket limits protect resources as well as enforcing semantics. Error messages name the rule without echoing the submitted value.
+
+### `SqlQuery` can be clearer than forcing a LINQ expression
+
+Read [MonitoringQueries](backend/UptimeUrpo.Api/Persistence/MonitoringQueries.cs). The slot-count and chart aggregates are PostgreSQL SQL, returned through EF's unmapped result classes. This uses your existing SQL knowledge and keeps grouping/filter rules visible.
+
+An interpolated argument to `Database.SqlQuery<T>` is a `FormattableString`; EF binds its values as database parameters. IDs, timestamps, and bucket lengths are not inserted as raw SQL text. Table/column identifiers stay fixed in source. Private aggregate classes are database projections, while public response records form the HTTP contract.
+
+`count(*) FILTER (...)` separates successful samples and actual HTTP responses. `count(DISTINCT floor(...))` counts occupied nominal slots without counting duplicates twice. PostgreSQL does the work; the application receives aggregated rows and creates explicit empty buckets for gaps.
+
+### Sample availability and coverage answer different questions
+
+Availability divides successful saved checks by all saved checks. Coverage divides occupied nominal slots by expected slots in enabled time. The pure [SamplingCoverage](backend/UptimeUrpo.Api/Monitoring/SamplingCoverage.cs) helper counts window/period intersections with an exclusive end.
+
+Two successful samples can produce 100% availability and low coverage. A slow expected response remains successful; a DNS failure is a failed sample with no HTTP response timing. These distinctions are business rules, not just formatting decisions.
+
+### Repeatable-read transactions protect multi-query views
+
+The queries use `BeginTransactionAsync(IsolationLevel.RepeatableRead, token)` and `await using`. PostgreSQL gives the read transaction a consistent historical snapshot while the monitor keeps writing. Disposal ends the read-only work; no writes need committing.
+
+Overview also contains current cached health. That cache is captured separately, so we document that the response is not one distributed atomic instant across cache and database. This is a useful boundary to explain in an interview.
+
+### Cursor pagination survives new insertions
+
+`IncidentPage.NextBeforeId` is the last returned ID when more rows exist. The next query selects `Id < beforeId`, sorts descending, and takes `limit + 1` to detect another page.
+
+Compare this with using an offset in a changing JavaScript list: inserting a newer item can shift offset positions. The ID boundary keeps older pages stable. Cursor/page values are validated; the SQL still performs ordering and limiting before results are materialized.
+
+### Incidents are durable state transitions
+
+The service's pending `FirstFailureAtUtc` survives restart. The threshold failure creates an incident, and success ends it. Those changes, the history row, and the current snapshot are saved atomically in the existing store transaction.
+
+The unique partial index enforces one open incident in PostgreSQL too. A gap leaves it open and flagged; changing the target definition ends it with a distinct resolution instead of inventing recovery. The upgrade seeds only M3's latest known failure timestamp and does not claim to reconstruct old outages.
+
+### Exception wrappers and cancellation
+
+The endpoint error boundary examines inner exceptions because EF can wrap a transient Npgsql failure in `InvalidOperationException`. Recognized storage failures become sanitized 503 Problem Details. An unrelated programming fault remains a generic 500. Host/client cancellation is rethrown rather than relabeled as a storage error.
+
+Cancellation reaches EF/Npgsql queries and their read transaction. A real PostgreSQL lock test verifies that cancelled SQL releases resources and the HTTP concurrency permit; this is stronger than asserting a fake method received a token.
+
+### Built-in limiters and OpenAPI
+
+`RateLimiter.CreateChained` combines a concurrency limiter and a fixed-minute limiter for analytics routes. A request needs both permits. There is no queue, and a completed/cancelled request releases its concurrency lease. These limits protect resources; they do not authenticate callers.
+
+`AddOpenApi` registers the document generator, while `MapOpenApi` serves JSON. `Produces<T>`, summaries, and descriptions describe response/error types and query limits without exposing EF entities. The document is available at `/openapi/v1.json`; no UI library is needed.
+
+### Explain it back
+
+1. Why can availability be 100% while coverage is 25%?
+2. Why must a DNS failure not become a zero-millisecond response sample?
+3. How does `beforeId` keep older incident pages stable?
+4. Why must incident transitions and check history share a transaction?
+5. What does repeatable read guarantee, and what does it not guarantee about cached health?
+6. How can a transient database error appear inside a non-database exception type?
+
+Follow [tutorial Part 5](tutorial.md#part-5--turn-history-into-a-useful-read-only-api) and [the M4 contract](docs/MILESTONE-4.md).
+
 ## Future entries
 
-- M4: DTOs, validation, query composition, API errors, and availability calculations.
 - M5–M7: frontend integration, production configuration, operations, and automated delivery.
 
 Add examples and lessons only when introduced. Mark implemented examples with source links and verification commands; keep unimplemented ideas labeled as previews.

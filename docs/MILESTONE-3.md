@@ -1,6 +1,6 @@
 # Milestone 3 — PostgreSQL persistence
 
-Status: implemented and locally verified. M4 requires approval before the history/uptime/incident API is built.
+Historical M3 record: completed before M4 approval. M4 now adds incidents, query APIs, OpenAPI, and automatic local backups before migration. See [the current M4 guide](MILESTONE-4.md); the descriptions below record the earlier stage.
 
 ## What changed
 

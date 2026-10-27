@@ -19,6 +19,7 @@ public sealed class MonitoredService
     // A durable current snapshot, updated atomically with the append-only history row.
     // Keeping it separate lets retention remove old raw rows without losing current state.
     public int ConsecutiveFailures { get; set; }
+    public DateTimeOffset? FirstFailureAtUtc { get; set; }
     public DateTimeOffset? LastCheckedAtUtc { get; set; }
     public DateTimeOffset? LastCompletedAtUtc { get; set; }
     public double? LastDurationMs { get; set; }
@@ -53,4 +54,17 @@ public sealed class CheckRecord
     public int? StatusCode { get; set; }
     public bool Success { get; set; }
     public FailureCategory? FailureCategory { get; set; }
+}
+
+public enum IncidentResolution { Recovered, ConfigurationChanged }
+
+public sealed class IncidentRecord
+{
+    public long Id { get; set; }
+    public string ServiceId { get; set; } = "";
+    public DateTimeOffset FirstFailureAtUtc { get; set; }
+    public DateTimeOffset ConfirmedAtUtc { get; set; }
+    public DateTimeOffset? EndedAtUtc { get; set; }
+    public IncidentResolution? Resolution { get; set; }
+    public bool HasMonitoringGaps { get; set; }
 }

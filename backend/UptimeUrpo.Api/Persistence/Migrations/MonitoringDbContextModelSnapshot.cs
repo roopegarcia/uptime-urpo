@@ -71,6 +71,51 @@ namespace UptimeUrpo.Api.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("UptimeUrpo.Api.Persistence.IncidentRecord", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("ConfirmedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("EndedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("FirstFailureAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("HasMonitoringGaps")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("ServiceId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndedAtUtc");
+
+                    b.HasIndex("ServiceId")
+                        .IsUnique()
+                        .HasFilter("\"EndedAtUtc\" IS NULL");
+
+                    b.HasIndex("ServiceId", "Id");
+
+                    b.ToTable("incidents", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Incidents_Resolution", "(\"EndedAtUtc\" IS NULL AND \"Resolution\" IS NULL) OR (\"EndedAtUtc\" IS NOT NULL AND \"Resolution\" IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("UptimeUrpo.Api.Persistence.MonitoredService", b =>
                 {
                     b.Property<string>("Id")
@@ -88,6 +133,9 @@ namespace UptimeUrpo.Api.Persistence.Migrations
 
                     b.Property<int>("FailureThreshold")
                         .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("FirstFailureAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("IntervalSeconds")
                         .HasColumnType("integer");
@@ -199,6 +247,15 @@ namespace UptimeUrpo.Api.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("UptimeUrpo.Api.Persistence.MonitoredService", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("UptimeUrpo.Api.Persistence.IncidentRecord", b =>
+                {
                     b.HasOne("UptimeUrpo.Api.Persistence.MonitoredService", null)
                         .WithMany()
                         .HasForeignKey("ServiceId")

@@ -20,6 +20,9 @@ public sealed class RetentionWorker(IServiceScopeFactory scopes, IOptions<Databa
                         var deleted = await store.DeleteOldChecksAsync(time.GetUtcNow().AddDays(-options.Value.RetentionDays),
                             options.Value.RetentionBatchSize, stoppingToken);
                         logger.LogInformation("History retention removed {Count} rows.", deleted);
+                        var incidents = await store.DeleteClosedIncidentsAsync(time.GetUtcNow().AddDays(-365),
+                            options.Value.RetentionBatchSize, stoppingToken);
+                        logger.LogInformation("Incident retention removed {Count} closed rows.", incidents);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
                     catch (Exception exception)

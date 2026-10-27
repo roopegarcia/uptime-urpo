@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–4 are complete. Parts 5–9 are planned.** The application now saves checks and current snapshots in PostgreSQL, restores state after restart, and reports database readiness. Earlier parts record the implementation at that stage; Part 4 explains the current database setup and save/restore path.
+Each part corresponds to one milestone. **Parts 1–5 are complete. Parts 6–9 are planned.** The application now exposes history, observed availability/coverage, incidents, and OpenAPI over its persistent monitoring backend. Earlier parts record those stages; Part 5 explains the current read API. The React dashboard is still the next milestone.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -549,6 +549,8 @@ For a short session, show the service-list JSON, trace the worker loop, then run
 
 **Milestone 3 · Complete**
 
+This part records M3's persistence foundation. M4 extends the schema with incidents, adds HTTP query endpoints, and makes the local migration helper create a backup first. See Part 5 for current behavior.
+
 ### What we built
 
 Checks now survive an application restart. PostgreSQL stores raw observations, the latest service snapshot/failure streak, and configuration periods. EF Core maps the data, a reviewed migration creates the schema, and a separate readiness endpoint reports storage availability.
@@ -721,9 +723,139 @@ Draw the prepare → save → publish flow, show the entity/context mapping, the
 
 ## Part 5 — Turn history into a useful read-only API
 
-**Milestone 4 · Planned; not built**
+**Milestone 4 · Complete**
 
-Add the remaining read endpoints, incident history, observed availability, monitoring coverage, bounded queries, validation, and OpenAPI. Teach the uptime denominator with worked examples drawn from tested application behavior, including missing observations.
+### What we built
+
+The backend now exposes observed availability and coverage, bounded chart history, paginated incidents, an overview, and OpenAPI JSON. Incidents are saved atomically with their check result and snapshot. Existing list/detail routes remain compatible, and reads still never trigger checks.
+
+This part also adds request limits, validated date/page parameters, real SQL cancellation tests, and a private local backup before migration. It does not add the React dashboard or deploy anything.
+
+### Step 1: Back up, migrate, and restart
+
+From the repository root, with Docker running, stop your old API using Ctrl+C in its own terminal, then:
+
+```sh
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+dotnet restore Uptime-Urpo.slnx --locked-mode
+dotnet tool restore
+python3 scripts/dev-db.py up
+python3 scripts/dev-db.py migrate
+python3 scripts/dev-db.py run
+```
+
+The helper now creates a custom-format `pg_dump` backup in ignored `.local/backups` before migrating. A backup failure prevents migration. You can make another backup with `python3 scripts/dev-db.py backup`. These files contain private data and are mode 0600; preserve them deliberately and keep them out of Git.
+
+The additive M4 migration was already applied locally after backup. The running user API was preserved, so it needs a restart to load the new code. Do not start a second monitor against the same database.
+
+### Step 2: Discover the read contract
+
+In another terminal:
+
+```sh
+curl --fail http://127.0.0.1:5080/openapi/v1.json
+curl --fail http://127.0.0.1:5080/api/services
+```
+
+OpenAPI describes route/query names, response DTOs, and errors. It is JSON documentation, not the future dashboard. Use a configured ID from the service list in the following requests; this checkout's existing target uses `iltapaska`.
+
+```sh
+curl --fail http://127.0.0.1:5080/api/services/iltapaska/statistics
+curl --fail http://127.0.0.1:5080/api/services/iltapaska/history
+curl --fail 'http://127.0.0.1:5080/api/services/iltapaska/incidents?limit=20'
+curl --fail http://127.0.0.1:5080/api/overview
+```
+
+### Step 3: Read the DTOs before the query implementation
+
+Open [MonitoringResponses](backend/UptimeUrpo.Api/Contracts/MonitoringResponses.cs). `AvailabilityWindow`, `HistoryPoint`, `IncidentPage`, and `OverviewResponse` make the public JSON shapes explicit. Nullable percentages/timings represent absence, not an automatic zero or perfect score.
+
+The API returns DTOs, not EF entities. Target URLs, database connection details, and raw exception messages remain outside the contract. This is similar to defining TypeScript response types, with actual C# record instances serialized at runtime.
+
+### Step 4: Explain availability versus coverage
+
+Availability is successful durably saved checks divided by all saved checks in the window. Two successful samples out of two yield 100%. Slow matching responses count as successful; failed checks reduce availability even before the DOWN threshold.
+
+Coverage separately asks how many expected nominal slots contain evidence. If only two of eight slots contain those samples, coverage is 25%. We cannot infer what happened during the other six slots. Missing observations are not confirmed downtime and do not enter the availability denominator.
+
+Read [SamplingCoverage](backend/UptimeUrpo.Api/Monitoring/SamplingCoverage.cs). Slots use each enabled configuration period's start/interval. Partial window edges count once; disabled/pre-enrollment time contributes none. Multiple samples in one slot cannot inflate coverage. Fixed-delay scheduling can drift across slot boundaries, so this metric is sampling density, not a continuous-time SLA.
+
+The `24h`, `7d`, and `30d` windows are elapsed UTC durations, avoiding local-day ambiguity around daylight-saving changes. Display-time localization belongs to the dashboard.
+
+### Step 5: Follow validation at the HTTP boundary
+
+Open [QueryParameters](backend/UptimeUrpo.Api/Endpoints/QueryParameters.cs), then [MonitoringEndpoints](backend/UptimeUrpo.Api/Endpoints/MonitoringEndpoints.cs). `[AsParameters]` groups query values, and `TryResolve` turns raw input into a bounded query or validation errors.
+
+History uses offset-bearing ISO-8601 dates, at most 30 days inside retention, an exclusive end, and no future end. Omitted dates select the previous 24 hours. `bucketMinutes` is restricted to documented values and at most 1,000 points; automatic selection grows the bucket for longer ranges.
+
+Try an invalid request without changing any target:
+
+```sh
+curl -i 'http://127.0.0.1:5080/api/services/iltapaska/history?bucketMinutes=0'
+```
+
+It returns 400 Problem Details explaining the rule, without echoing the supplied value. An unknown ID returns 404. A storage problem returns sanitized 503. Those statuses describe the API operation, not the website's HTTP status.
+
+### Step 6: Read the PostgreSQL aggregates
+
+Open [MonitoringQueries](backend/UptimeUrpo.Api/Persistence/MonitoringQueries.cs). Parameterized `SqlQuery` calls group samples in PostgreSQL. `count(*) FILTER` separates successes/responses, while a distinct slot index prevents duplicate coverage. The application receives aggregate rows and fills empty buckets explicitly.
+
+The interpolated SQL argument is a `FormattableString`, so EF binds IDs, times, and bucket lengths as parameters. No submitted query text becomes SQL. This uses your SQL experience without hiding the calculation inside complicated abstractions.
+
+Mean/min/max timings include actual HTTP responses, including unexpected status responses. DNS failures remain failed observations but have no HTTP response timing. An empty bucket has null timing and remains present as `missing` or `not_monitored`. An observed bucket can still have partial coverage; it does not promise continuous observation.
+
+### Step 7: Understand the read transaction
+
+Each multi-query read uses repeatable-read isolation. Its historical queries see one consistent PostgreSQL snapshot while the monitor keeps writing. Request cancellation reaches those queries and disposes the transaction.
+
+Overview also contains a separately captured cached health snapshot. It does not promise a distributed atomic instant across cache and database. That distinction matters when explaining consistency honestly.
+
+### Step 8: Follow one durable incident
+
+Read [MonitoringStore](backend/UptimeUrpo.Api/Persistence/MonitoringStore.cs). The pending first-failure time is saved on the service, so it survives restart. The threshold failure inserts an incident with first-failure and confirmation timestamps. Later failures do not insert another open incident; a partial unique index enforces that in PostgreSQL.
+
+A success closes it as `recovered`, even if latency leaves the service DEGRADED. A stale gap or disabled monitoring keeps it open with uncertainty. Changing URL/status expectation ends it as `configuration_changed`, not recovered. The duration can include flagged gaps; it is not continuous proven downtime.
+
+The history row, snapshot/streak, and incident transition share one transaction. The rollback test deliberately breaks a history insert at the confirmation step and proves that no incident or new snapshot survives the failed transaction.
+
+M3 did not track incidents. The upgrade seeds only its latest known failed snapshot time and does not invent older outage history. New streaks retain their first tracked failure correctly.
+
+### Step 9: Page through incidents with a cursor
+
+An incident page contains `items` and nullable `nextBeforeId`. Pass that value as `beforeId` for the next older page, keeping `limit` between 1 and 100.
+
+Because queries use IDs below a boundary, a newly inserted incident does not shift the older range. This avoids offset pagination moving items between pages. Current duration uses the page's `asOfUtc`; ended incidents keep their end-based duration. Closed incidents retain 365 days by end time; open incidents never expire.
+
+### Step 10: Exercise behavior through controlled tests
+
+```sh
+dotnet test Uptime-Urpo.slnx --no-restore
+dotnet test tests/UptimeUrpo.IntegrationTests --no-build --no-restore --filter 'FullyQualifiedName~Analytics|FullyQualifiedName~Incident|FullyQualifiedName~Upgrade'
+```
+
+[Analytics tests](tests/UptimeUrpo.IntegrationTests/AnalyticsTests.cs) cover sample/coverage denominators, duplicate slots, gaps, interval changes, and boundaries. [Incident tests](tests/UptimeUrpo.IntegrationTests/IncidentTests.cs) cover confirmation, recovery, restart, configuration changes, rollback, uniqueness, retention, and pagination.
+
+[HTTP tests](tests/UptimeUrpo.IntegrationTests/AnalyticsApiTests.cs) exercise DTOs, errors, OpenAPI, and real PostgreSQL cancellation. They hold a table lock to verify the four-request concurrency bound and cancellation returning permits. A rate-limit test verifies 429 after the fixed-minute allowance while liveness remains available. These scenarios use disposable databases and no real target outages.
+
+### Step 11: Recognize the operational boundary
+
+Analytics routes share four active requests and 60 requests per minute, with no queue. Limits plus bounded ranges/pages and SQL command timeout constrain work; they do not provide authentication. Keep the listener private. There is no load benchmark or deployed evidence yet.
+
+The user's existing API process was not stopped during implementation. Native checks of these new routes await its restart; API behavior was verified with ASP.NET Core's test server and real disposable PostgreSQL. Local history was backed up and retained through the migration, with no NUC or public deployment work.
+
+### Teach this part
+
+Show a statistics response, explain a 100%-availability/25%-coverage example, then trace an incident and its rollback test. Ask:
+
+- Why can missing samples coexist with 100% observed availability? **The percentage describes observed samples; coverage reports missing evidence separately.**
+- Why keep a DNS failure out of response-time averages? **No HTTP response headers arrived.**
+- What prevents two open incidents for one service? **The write logic plus a unique partial database index.**
+- Why is a changed URL a distinct resolution? **Success at the new target does not prove the old target recovered.**
+- What makes cursor pages stable? **An ID boundary remains meaningful when newer items are inserted.**
+- Does a 429 mean the target is DOWN? **No; the analytics request exceeded an API resource limit.**
+
+See [the M4 contract and evidence](docs/MILESTONE-4.md). **Next is Part 6: the React dashboard**, after approval.
 
 ## Part 6 — Build the React dashboard
 

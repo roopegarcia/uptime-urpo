@@ -1,6 +1,6 @@
 # Local development prerequisites
 
-This guide records Milestone 0 setup on an Apple Silicon Mac. For the current application, build/test/run commands are in [the M3 guide](MILESTONE-3.md). Run commands from the repository root unless stated otherwise.
+This guide records Milestone 0 setup on an Apple Silicon Mac. For current build/test/run commands, see [the M4 guide](MILESTONE-4.md). Run commands from the repository root unless stated otherwise.
 
 ## .NET SDK
 

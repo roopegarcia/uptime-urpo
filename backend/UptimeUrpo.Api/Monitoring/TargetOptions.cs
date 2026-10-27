@@ -17,7 +17,7 @@ public sealed class TargetOptions
     public bool IsValid()
     {
         return Id is { Length: >= 1 and <= 64 }
-            && Regex.IsMatch(Id, "^[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.CultureInvariant)
+            && Regex.IsMatch(Id, @"\A[a-z0-9]+(-[a-z0-9]+)*\z", RegexOptions.CultureInvariant)
             && !string.IsNullOrWhiteSpace(Name)
             && Name.Length <= 80
             && !Name.Any(char.IsControl)

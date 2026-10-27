@@ -15,12 +15,15 @@ public sealed class MonitoringStore(MonitoringDbContext db, IOptions<MonitoringO
         var services = await db.Services.ToDictionaryAsync(service => service.Id, token);
         var periods = await db.Periods.Where(period => period.EndedAtUtc == null)
             .ToDictionaryAsync(period => period.ServiceId, token);
+        var incidents = await db.Incidents.Where(incident => incident.EndedAtUtc == null)
+            .ToDictionaryAsync(incident => incident.ServiceId, token);
 
         foreach (var service in services.Values.Where(service => !targets.Any(target => target.Id == service.Id)))
         {
             service.Retired = true;
             service.Enabled = false;
             if (periods.TryGetValue(service.Id, out var period)) period.EndedAtUtc = now;
+            if (incidents.TryGetValue(service.Id, out var incident)) incident.HasMonitoringGaps = true;
         }
 
         // Close changed periods before inserting replacements (the partial index permits one open period).
@@ -36,6 +39,15 @@ public sealed class MonitoringStore(MonitoringDbContext db, IOptions<MonitoringO
             var changed = service.Retired || !Matches(service, target);
             if (changed || !periods.ContainsKey(target.Id))
             {
+                if (incidents.TryGetValue(target.Id, out var incident))
+                {
+                    incident.HasMonitoringGaps = true;
+                    if (service.Url != new Uri(target.Url).AbsoluteUri || service.ExpectedStatusCode != target.ExpectedStatusCode)
+                    {
+                        incident.EndedAtUtc = now;
+                        incident.Resolution = IncidentResolution.ConfigurationChanged;
+                    }
+                }
                 if (periods.TryGetValue(target.Id, out var period)) period.EndedAtUtc = now;
                 ClearSnapshot(service);
                 newPeriods.Add(NewPeriod(target, now));
@@ -58,6 +70,32 @@ public sealed class MonitoringStore(MonitoringDbContext db, IOptions<MonitoringO
             throw new InvalidOperationException("Persisted service configuration does not match this check.");
         var period = await db.Periods.SingleAsync(period => period.ServiceId == target.Id && period.EndedAtUtc == null, token);
         var result = observation.Result;
+        var incident = await db.Incidents.SingleOrDefaultAsync(incident => incident.ServiceId == target.Id && incident.EndedAtUtc == null, token);
+        var gap = service.LastCompletedAtUtc is { } completed
+            && (observation.CompletedAtUtc - completed > TimeSpan.FromSeconds(2 * target.IntervalSeconds)
+                || observation.CompletedAtUtc < completed);
+        if (incident is not null && gap) incident.HasMonitoringGaps = true;
+        if (result.Success)
+        {
+            service.FirstFailureAtUtc = null;
+            if (incident is not null)
+            {
+                incident.EndedAtUtc = observation.CompletedAtUtc;
+                incident.Resolution = IncidentResolution.Recovered;
+            }
+        }
+        else
+        {
+            if (observation.ConsecutiveFailures <= 1 || service.FirstFailureAtUtc is null)
+                service.FirstFailureAtUtc = result.CheckedAtUtc;
+            if (observation.ConsecutiveFailures >= target.FailureThreshold && incident is null)
+                db.Incidents.Add(new IncidentRecord
+                {
+                    ServiceId = target.Id,
+                    FirstFailureAtUtc = service.FirstFailureAtUtc.Value,
+                    ConfirmedAtUtc = observation.CompletedAtUtc
+                });
+        }
         db.Checks.Add(new CheckRecord
         {
             ServiceId = target.Id,
@@ -100,6 +138,15 @@ public sealed class MonitoringStore(MonitoringDbContext db, IOptions<MonitoringO
             .OrderBy(check => check.CompletedAtUtc).ThenBy(check => check.Id)
             .Take(batchSize).Select(check => check.Id).ToArrayAsync(token);
         return await db.Checks.Where(check => ids.Contains(check.Id)).ExecuteDeleteAsync(token);
+    }
+
+    public async Task<int> DeleteClosedIncidentsAsync(DateTimeOffset cutoffUtc, int batchSize, CancellationToken token)
+    {
+        if (batchSize is < 1 or > 5000) throw new ArgumentOutOfRangeException(nameof(batchSize));
+        var ids = await db.Incidents.Where(incident => incident.EndedAtUtc < cutoffUtc)
+            .OrderBy(incident => incident.EndedAtUtc).ThenBy(incident => incident.Id)
+            .Take(batchSize).Select(incident => incident.Id).ToArrayAsync(token);
+        return await db.Incidents.Where(incident => ids.Contains(incident.Id)).ExecuteDeleteAsync(token);
     }
 
     public async Task<bool> IsSchemaReadyAsync(CancellationToken token)
@@ -150,6 +197,7 @@ public sealed class MonitoringStore(MonitoringDbContext db, IOptions<MonitoringO
         service.LastSuccess = null;
         service.LastFailureCategory = null;
         service.ConsecutiveFailures = 0;
+        service.FirstFailureAtUtc = null;
     }
 
     private static PersistedSnapshot ToSnapshot(MonitoredService service) => new(service.Id,

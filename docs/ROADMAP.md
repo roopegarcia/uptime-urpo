@@ -1,6 +1,6 @@
 # Milestones and acceptance criteria
 
-Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M3 are complete and locally verified; M4–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), and [M3](MILESTONE-3.md#verification-record--2026-10-26).
+Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M4 are complete and locally verified; M5–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), and [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27).
 
 At every milestone:
 
@@ -41,6 +41,8 @@ Verify and pin EF Core/Npgsql packages. Add entities, migrations, scoped databas
 Acceptance: disposable PostgreSQL tests migrate an empty database, store and query results, preserve relevant state across app restart, enforce retention boundaries, and exercise database failures. Migration commands and local volume removal consequences are documented. No NUC deployment occurs.
 
 ## M4 — Monitoring API
+
+Status: complete. Query DTOs, bounded aggregation, coverage mapping, incident transitions, cursor pagination, validation/errors, cancellation, resource limits, and OpenAPI are implemented. Existing cached routes remain compatible. The backed-up local migration is applied; the existing native API process must restart to load routes. See [the contract and evidence](MILESTONE-4.md).
 
 Complete the read-only endpoints, durable incident transitions, observed availability and coverage, pagination, bounded history/aggregation, validation, cancellation, Problem Details, and OpenAPI. Lock the endpoint/query DTOs and coverage opportunity mapping in this milestone's implementation plan.
 

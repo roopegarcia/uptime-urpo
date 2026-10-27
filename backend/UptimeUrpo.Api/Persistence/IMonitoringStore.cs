@@ -11,5 +11,6 @@ public interface IMonitoringStore
     Task<IReadOnlyList<PersistedSnapshot>> SynchronizeAsync(CancellationToken token);
     Task SaveAsync(TargetOptions target, MonitoringObservation observation, CancellationToken token);
     Task<int> DeleteOldChecksAsync(DateTimeOffset cutoffUtc, int batchSize, CancellationToken token);
+    Task<int> DeleteClosedIncidentsAsync(DateTimeOffset cutoffUtc, int batchSize, CancellationToken token);
     Task<bool> IsSchemaReadyAsync(CancellationToken token);
 }

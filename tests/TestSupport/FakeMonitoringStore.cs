@@ -27,5 +27,6 @@ public sealed class FakeMonitoringStore : IMonitoringStore
     }
 
     public Task<int> DeleteOldChecksAsync(DateTimeOffset cutoffUtc, int batchSize, CancellationToken token) => Task.FromResult(0);
+    public Task<int> DeleteClosedIncidentsAsync(DateTimeOffset cutoffUtc, int batchSize, CancellationToken token) => Task.FromResult(0);
     public Task<bool> IsSchemaReadyAsync(CancellationToken token) => Task.FromResult(SchemaReady);
 }

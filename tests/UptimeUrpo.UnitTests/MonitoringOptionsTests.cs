@@ -5,6 +5,10 @@ namespace UptimeUrpo.UnitTests;
 public sealed class MonitoringOptionsTests
 {
     [Fact]
+    public void ServiceIdMustMatchTheEntireSafeIdentifier() =>
+        Assert.False(new TargetOptions { Id = "service\n" }.IsValid());
+
+    [Fact]
     public void LegacyTargetIsSupportedButNotMergedWithTargets()
     {
         var options = new MonitoringOptions { Target = new TargetOptions() };
