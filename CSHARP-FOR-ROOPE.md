@@ -502,8 +502,28 @@ The restore drill found that default privileges are per database. Restoring as t
 
 Follow [tutorial Part 7](tutorial.md#part-7--deploy-privately-to-the-nuc) and [M6 evidence](docs/MILESTONE-6.md) to demonstrate the image, private access, restart, and restore boundaries. Keep a database replacement distinct from a disposable restore check, and an image rollback distinct from a schema rollback.
 
+## Milestone 7 — Build gates and compiled schema metadata
+
+### Reflection answers one operational question
+
+The `--schema-migrations` path in [Program.cs](backend/UptimeUrpo.Api/Program.cs) reads the current assembly's types and their `MigrationAttribute` IDs. `GetCustomAttribute<T>()` is reflection: inspecting metadata attached to compiled types. Filtering nulls, sorting IDs, and serializing the array provides a stable CLI contract.
+
+This happens before host construction, so it needs no database configuration and starts no worker. It gives the rollback tool the migration expectations of the actual image. Keep reflection narrow; ordinary monitoring requests still use explicit classes and DI.
+
+### A matching schema gate precedes rollback
+
+The operator tool compares that list with applied EF migration IDs before stopping the app. A mismatch fails closed. For matching IDs it backs up and starts the retained image without invoking the migration command. Review code/data compatibility alongside this check.
+
+An isolated test demonstrated a failed app release, successful same-schema image rollback, and rejection of a newer schema marker. A restored earlier database contained one check while the current isolated database retained two. A process exit code, schema gate, and restored data each answer a different operational question.
+
+### Build/test commands become delivery gates
+
+[scripts/verify.py](scripts/verify.py) is the shared local/hosted recipe. Locked restore and warnings-as-errors build the backend; fast and PostgreSQL test phases use a runsettings file that rejects zero selected tests. GitHub job dependencies gate the image/candidate stage, and artifact promotion rechecks the successful run and exact source/image identity.
+
+Follow [tutorial Part 8](tutorial.md#part-8--automate-checks-and-delivery) and [M7's evidence](docs/MILESTONE-7.md). Hosted execution and delivery require their own observed results; local passing tests alone do not prove that GitHub ran the workflow.
+
 ## Future entries
 
-- M7: GitHub Actions validation, explicitly triggered delivery, and recovery exercises.
+- M8, if separately approved: Azure-focused provisioning concepts and infrastructure-as-code.
 
 Add examples and lessons only when introduced. Mark implemented examples with source links and verification commands; keep unimplemented ideas labeled as previews.

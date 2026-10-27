@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Reflection;
+using Microsoft.EntityFrameworkCore.Migrations;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +9,16 @@ using UptimeUrpo.Api.Contracts;
 using UptimeUrpo.Api.Monitoring;
 using UptimeUrpo.Api.Persistence;
 using UptimeUrpo.Api.Endpoints;
+
+// Schema metadata is read without host startup, credentials, database access, or monitoring.
+if (args is ["--schema-migrations"])
+{
+    var migrations = typeof(Program).Assembly.GetTypes()
+        .Select(type => type.GetCustomAttribute<MigrationAttribute>()?.Id)
+        .Where(id => id is not null).Order().ToArray();
+    Console.WriteLine(JsonSerializer.Serialize(migrations));
+    return;
+}
 
 // Container readiness probe: no configuration, worker, or second database context starts.
 if (args is ["--health-check"])

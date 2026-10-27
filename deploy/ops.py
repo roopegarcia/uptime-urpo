@@ -170,6 +170,28 @@ class Stack:
         temporary.replace(self.state / 'settings.json')
         print('Release ready. Database migrations were explicit; no automatic schema rollback is implied.')
 
+    def rollback(self):
+        run(['docker','image','inspect',self.image],stdout=subprocess.DEVNULL)
+        # Exact equality is intentionally conservative: image rollback never undoes schema changes.
+        output = subprocess.check_output(['docker','run','--rm','--network','none','--read-only',
+            '--cap-drop','ALL','--security-opt','no-new-privileges',
+            '--entrypoint','dotnet',self.image,'UptimeUrpo.Api.dll','--schema-migrations'], text=True)
+        expected = json.loads(output)
+        if not isinstance(expected,list) or not expected or not all(isinstance(item,str) for item in expected):
+            raise SystemExit('Image does not provide usable schema metadata; rollback refused.')
+        applied = json.loads(self.sql('SELECT coalesce(json_agg("MigrationId" ORDER BY "MigrationId"), $json$[]$json$::json) FROM "__EFMigrationsHistory"',capture=True).stdout)
+        if expected != applied:
+            raise SystemExit('Image/database migrations differ. Image rollback cannot reverse migrations; review data recovery separately.')
+        self.compose('stop','app')
+        self.backup(quiescent=True)
+        self.compose('up','-d','--no-deps','--force-recreate','--wait','--wait-timeout','90','app')
+        self.ready()
+        self.settings['image'] = self.image
+        temporary = self.state / ('settings-' + secrets.token_hex(4) + '.json')
+        private_write(temporary,json.dumps(self.settings,indent=2)+'\n')
+        temporary.replace(self.state/'settings.json')
+        print('Application rollback ready. No schema migration or data restore was run.')
+
     def ready(self):
         url = f"http://127.0.0.1:{self.settings['port']}/health/ready"
         for _ in range(60):
@@ -211,6 +233,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE uptime_urpo_migrator IN SCHEMA public GRANT US
             if manifest.get('expectedCounts') is not None and counts != manifest['expectedCounts']:
                 raise SystemExit('Restored row counts differ from the quiescent backup manifest.')
             print('Restore into a separate disposable database passed: ' + json.dumps(counts), flush=True)
+            return counts
         finally:
             # Generated database only. The main database and its volume are never dropped.
             self.sql(f'DROP DATABASE "{name}" WITH (FORCE)')
@@ -218,7 +241,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE uptime_urpo_migrator IN SCHEMA public GRANT US
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['init', 'up', 'status', 'backup', 'scheduled-backup', 'restore-check', 'restart', 'stop', 'down'])
+    parser.add_argument('command', choices=['init', 'up', 'rollback', 'status', 'backup', 'scheduled-backup', 'restore-check', 'restart', 'stop', 'down'])
     parser.add_argument('--state', type=Path, default=ROOT / '.local' / 'production')
     parser.add_argument('--project')
     parser.add_argument('--port', type=int)
@@ -233,6 +256,9 @@ def main():
     stack = Stack(state, args.image)
     with stack.lock():
         if args.command == 'up': stack.release()
+        elif args.command == 'rollback':
+            if not args.image: parser.error('rollback requires an explicit --image')
+            stack.rollback()
         elif args.command == 'status': stack.compose('ps')
         elif args.command == 'backup': stack.backup()
         elif args.command == 'scheduled-backup': stack.scheduled_backup()

@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–7 are complete. Parts 8–9 are planned.** The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
+Each part corresponds to one milestone. **Parts 1–7 are complete. Part 8 is implemented with local evidence and pending hosted verification. Part 9 is planned. The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -1131,13 +1131,119 @@ Demonstrate the SSH-forwarded dashboard, then explain the Dockerfile stages, dat
 6. Does Docker restart every unhealthy process? **No. Health status and restart policy have distinct roles.**
 7. Does rolling back an image undo migrations? **No. Schema/data recovery needs its own compatible, reviewed procedure.**
 
-**Next:** Part 8 adds GitHub Actions validation and explicitly triggered delivery, after the next milestone approval.
+**Next:** Part 8 adds GitHub Actions validation and an explicitly prepared candidate deployed from the Mac over SSH.
 
 ## Part 8 — Automate checks and delivery
 
-**Milestone 7 · Planned; not built**
+**Milestone 7 · Implemented and locally verified; hosted execution pending**
 
-Introduce CI checks, reproducible release builds, explicitly triggered deployment, and failed-release recovery. Explain the difference between rolling back an application image and recovering a database after a migration.
+### What we built
+
+We added GitHub Actions validation, a manually triggered deployment-preparation workflow, exact-artifact delivery from the Mac, guarded image rollback, and an isolated failure/recovery exercise. GitHub receives no NUC credential or production target configuration. The operator chose hosted CI with Mac-side SSH deployment, keeping the private network boundary from Part 7.
+
+The source files and local tests exist; a successful hosted run and artifact promotion still need their own evidence. [The M7 record](docs/MILESTONE-7.md) tracks that distinction. The running NUC image remains the verified M6 release until explicitly promoted.
+
+### What you need first
+
+Parts 1–7, the project on GitHub, and the same local SDK/Node/Python/Docker prerequisites. This checkout is on main, and the operator owns pushes. The new GitHub repository must use main as its default branch before the manual workflow is available.
+
+```sh
+git push -u origin main
+python3 scripts/verify.py
+```
+
+The local verifier runs backend, frontend, operations, and an AMD64 image build. Read [verify.py](scripts/verify.py) as the list of actual commands; GitHub calls the same parts rather than maintaining a different test recipe.
+
+### Step 1: Give continuous integration a concrete meaning
+
+A GitHub **workflow** describes when jobs run. A **job** receives a hosted runner, an ephemeral Linux environment. Its **steps** execute actions or commands. Separate jobs do not share a working directory automatically.
+
+[ci.yml](.github/workflows/ci.yml) has backend/PostgreSQL, frontend, operations, and image/recovery jobs. The image job declares `needs` for the other three. If any validation fails, that dependent job cannot prepare an image for delivery. Cached packages save downloads; they do not replace running tests.
+
+The backend runs fast tests separately from disposable PostgreSQL tests. [ci.runsettings](tests/ci.runsettings) makes selecting zero tests fail instead of quietly passing a broken filter. This caught an operational distinction worth teaching: a green command can otherwise mean “no matching tests,” rather than “the intended suite passed.”
+
+Actions use reviewed commit SHAs, and Docker inputs use digests plus locked dependencies. Updates are deliberate changes that need verification. We do not claim independent fresh builds produce identical bytes; instead, we promote the exact image already built and checked.
+
+### Step 2: Separate validation from permission to deliver
+
+Pushes and pull requests trigger validation. [prepare-deployment.yml](.github/workflows/prepare-deployment.yml) uses workflow_dispatch and main to prepare a deployment candidate explicitly. It reuses the validation workflow, including the real-container recovery exercise, before uploading anything deployable.
+
+```sh
+gh workflow run prepare-deployment.yml --repo roopegarcia/uptime-urpo --ref main
+```
+
+GitHub cannot reach the private NUC LAN address. We chose to keep deployment on the Mac rather than adding a privileged self-hosted runner or giving a hosted runner production access. Repository rules requiring checks before merging are separate GitHub settings; workflow YAML alone does not establish branch protection.
+
+### Step 3: Package source and the exact image together
+
+Read [package-release.py](deploy/package-release.py). It requires clean source, a commit-tagged AMD64 image with the matching source label, and GitHub run/attempt metadata. It saves source.tar, image.tar, and manifest.json.
+
+The manifest records the commit, repository, run/attempt, image ID, migrations, and file hashes. No private configuration or database backup is included. The runtime's schema metadata command runs without credentials or network access.
+
+GitHub records the uploaded ZIP's SHA-256 digest. A checksum detects changed bytes; matching run/source/image identities establish which candidate those bytes represent. The delivery tool requires both. Nothing here claims trust independent of the repository and GitHub account controlling that run.
+
+### Step 4: Promote without rebuilding
+
+Read [from-actions](deploy/from-actions), [release_artifact.py](deploy/release_artifact.py), and [from-artifact](deploy/from-artifact). The operator supplies a successful preparation run ID:
+
+```sh
+./deploy/from-actions --repository roopegarcia/uptime-urpo --run-id RUN_ID --host roope@nuc --directory /home/roope/apps/uptime-urpo --port 8108
+```
+
+The tool verifies the repository, manual event, workflow path, branch, successful conclusion, attempt, and artifact digest. It rejects changed files and unsafe ZIP/source archive paths. It creates a detached worktree at the candidate commit while preserving your current branch. Unexpected edits prevent forced worktree cleanup.
+
+After importing the image locally, it checks its ID, architecture, commit label, and migration list. The shared publisher transports that same image and source over SSH, compares the received image ID, then performs Part 7's locked backup-before-migration/readiness sequence. There is no Mac-side rebuild during promotion.
+
+CLI artifact download needs authenticated GitHub access. An authenticated browser download can instead be supplied with `--archive`; digest verification still applies. Public metadata can be inspected without a CLI token. [The delivery guide](docs/CI-AND-DELIVERY.md) documents setup and limits.
+
+### Step 5: Learn the small C# addition
+
+[Program.cs](backend/UptimeUrpo.Api/Program.cs) handles `--schema-migrations` before creating the application host. It reads MigrationAttribute IDs from types in the compiled assembly, sorts them, serializes JSON, and exits.
+
+This is **reflection**: inspecting metadata that exists on compiled types. We use it for a narrow operational question, not a runtime discovery framework. No database connection or monitoring worker starts. In familiar terms, it resembles asking a packaged Node module for its supported schema version without launching its server.
+
+The rollback tool probes the image in a container with no network, no credentials, a read-only root, and dropped capabilities. The migration list comes from the actual retained image rather than trusting its human-readable tag.
+
+### Step 6: Exercise failure and explicit rollback
+
+Run the dedicated isolated exercise:
+
+```sh
+python3 deploy/recovery-drill.py --image uptime-urpo:validation
+```
+
+It initializes a fresh synthetic stack, seeds observations, builds a deliberately invalid application image, and attempts a release. The unchanged migration stage succeeds, but the app fails readiness. Recorded last-good image/data stay intact.
+
+[Stack.rollback](deploy/ops.py) requires exact equality between the selected image's migration IDs and the database's applied IDs before stopping the app. It then backs up and starts the retained image without migrations. Review application/data compatibility as well; matching migration IDs are one conservative gate.
+
+The exercise recovered the healthy image with both observations preserved. It also inserted a newer schema marker only into the isolated fixture and proved rollback was refused before stopping the healthy app. M6 images do not implement the new metadata command, so this automated path refuses them rather than guessing.
+
+### Step 7: Demonstrate the limit of data recovery
+
+The exercise saved a backup with one check, then saved a second check afterward. Restoring the earlier backup into a separate database recovered exactly one check. The live isolated database kept both.
+
+That is the practical difference between an application rollback and database recovery: switching a compatible image preserves the current observations; restoring older data can omit later observations. The drill does not replace the live database or reverse a destructive migration.
+
+Keep the damaged/current state, restore into a separate database, validate data/permissions, and review any production switch separately. Do not automatically restore an old backup because a container failed readiness.
+
+### Step 8: Report evidence at the correct level
+
+Locally: 199 backend, 25 frontend, and 21 operations/artifact/gate tests pass. Workflow linting, Release/frontend builds, and a real isolated failed-release/rollback/recovery drill pass. A deliberately failing validation command stopped before build; failed-run/artifact inputs were rejected before delivery.
+
+Still pending in this record: a clean-commit reproduction, hosted Ubuntu runs, actual artifact download/promotion, and any repository rule configuration. See [M7](docs/MILESTONE-7.md) for later evidence. These are distinct from the already deployed M6 baseline.
+
+### Teach this part
+
+Demonstrate a validation run, its dependent image job, a manual preparation, its manifest, and the isolated recovery log. Ask:
+
+1. Is a successful push the same as a successful deployment? **No. Validation/preparation and Mac-side promotion are separate actions.**
+2. Why deploy the existing image? **Rebuilding would create a different candidate after validation.**
+3. Why inspect migration IDs before stopping the app? **An unsafe rollback can be rejected while the healthy app keeps running.**
+4. Why does the schema CLI avoid host startup? **A metadata probe must not start another monitor or need production credentials.**
+5. What does a restored one-check database omit? **The second observation saved after that backup.**
+6. Does workflow YAML prove branch protection? **No. Repository rules require their own configuration and verification.**
+
+**What remains:** finish hosted evidence for this milestone. Optional Part 9 requires a separate reviewed Azure plan and approval before paid provisioning.
 
 ## Part 9 — Explore Azure and Infrastructure as Code
 

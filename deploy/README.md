@@ -21,3 +21,11 @@ python3 deploy/ops.py down --state .local/m6-check
 Initialize only once. If state already exists, reuse it. If a database volume exists without its original state, recover the matching credentials instead of reinitializing. The app starts with no targets; private production target configuration is supplied deliberately.
 
 Secrets are file-backed Compose mounts. Their host parent directories are mode 0700. Mounted files are readable by the non-root container users; these permissions do not protect against a host administrator or someone with Docker access. Never print `docker compose config` or full container inspect data into public logs. Build context excludes local settings and backups.
+
+## M7 additions
+
+[CI and delivery](../docs/CI-AND-DELIVERY.md) uses the same validation commands locally and on GitHub. `from-actions` verifies a manually prepared candidate and promotes its exact image from the Mac over SSH; it does not rebuild. `from-artifact` is the internal verification/promotion entry point and requires the retained candidate ZIP plus matching GitHub metadata. No NUC secret is given to a hosted runner.
+
+`ops.py rollback --image IMAGE` requires matching migration IDs before stopping the app, backs up, and starts the chosen image without migrations. Review code/data compatibility; this guard cannot reverse migrations. M7 images implement the schema metadata CLI; older M6 images are refused by this automated path.
+
+`recovery-drill.py --image IMAGE` creates a fresh isolated project and demonstrates a failed release, explicit image rollback, unknown-schema refusal, and post-backup observations missing from a recovered copy. State/volumes are retained after its containers stop. Never adapt its synthetic data steps to production.

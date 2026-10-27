@@ -9,6 +9,26 @@ from unittest.mock import patch
 import ops
 
 class OperationTests(unittest.TestCase):
+    def test_schema_mismatch_blocks_rollback_before_stopping_the_app(self):
+        stack=object.__new__(ops.Stack);stack.image='uptime-urpo:previous'
+        stack.sql=lambda *args,**kwargs: type('Result',(),{'stdout':'["new-schema"]'})()
+        calls=[];stack.compose=lambda *args,**kwargs:calls.append(args)
+        with patch.object(ops,'run'), patch.object(ops.subprocess,'check_output',return_value='["old-schema"]'):
+            with self.assertRaisesRegex(SystemExit,'cannot reverse migrations'):stack.rollback()
+        self.assertEqual([],calls)
+
+    def test_rollback_does_not_run_migrations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stack=object.__new__(ops.Stack);stack.image='uptime-urpo:previous';stack.state=Path(directory)
+            stack.settings={'image':'uptime-urpo:broken'}
+            stack.sql=lambda *args,**kwargs:type('Result',(),{'stdout':'["same-schema"]'})()
+            calls=[];stack.compose=lambda *args,**kwargs:calls.append(args)
+            stack.backup=lambda **kwargs:calls.append(('backup',));stack.ready=lambda:None
+            with patch.object(ops,'run'), patch.object(ops.subprocess,'check_output',return_value='["same-schema"]'):stack.rollback()
+            self.assertFalse(any('migrate' in call for call in calls))
+            self.assertLess(calls.index(('backup',)),next(i for i,call in enumerate(calls) if call[0]=='up'))
+            self.assertEqual('uptime-urpo:previous',json.loads((stack.state/'settings.json').read_text())['image'])
+
     def test_daily_schedule_uses_helsinki_and_does_not_repeat_at_dst_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             stack = object.__new__(ops.Stack)

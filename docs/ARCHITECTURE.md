@@ -188,3 +188,11 @@ Releases use a clean Git snapshot by default, validation before upload, remote/o
 The first access layer is existing SSH authentication and an explicitly loopback-bound local forward. Direct LAN access to the origin was blocked; no Cloudflare/Nginx route was created. Changing that boundary requires inspecting the intended Access policy and verifying origin isolation again.
 
 Daily backups use Europe/Helsinki without changing the host timezone. Recovery drills restore into a separate generated database with migration ownership and per-database runtime grants, validate data/access, then drop only that copy. A manual owner-only off-host archive includes passwords/configuration needed for recovery. Image rollback cannot undo schema changes; a full database replacement remains a separately reviewed recovery operation. See [deployment commands and limits](DEPLOYMENT.md).
+
+## Hosted validation and Mac-side promotion (M7)
+
+GitHub-hosted runners validate/build/package through reusable CI and an explicitly dispatched main-branch preparation workflow. The operator selected Mac-side SSH promotion, so no self-hosted runner, production credential, or NUC route is granted to GitHub. Runtime deployment remains a distinct action.
+
+The artifact binds source commit, run/attempt, image ID, migration metadata and hashes. Mac delivery verifies GitHub's ZIP digest and the extracted content, creates an isolated clean worktree, checks the loaded image, and uses the shared locked publisher transport. Remote image identity is compared before the backup/migration/readiness sequence. The promoted image is not rebuilt.
+
+A schema metadata CLI runs before application startup and exposes only compiled migration IDs. Explicit image rollback requires equality with applied IDs before stopping the app, then backs up and switches images without migrations. A separate synthetic recovery drill demonstrates failure, rollback, unknown-schema refusal and observations omitted by an earlier backup. Hosted verification remains distinct from local evidence; see [M7](MILESTONE-7.md).

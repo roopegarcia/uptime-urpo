@@ -9,6 +9,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from ops import Stack
+from verification_fixture import seed_fixture
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--state', type=Path, required=True)
@@ -47,10 +48,7 @@ with stack.lock():
     privileges = stack.sql("SELECT rolsuper, rolcreatedb, rolcreaterole, has_schema_privilege('uptime_urpo_runtime','public','CREATE'), has_table_privilege('uptime_urpo_runtime','public.\"__EFMigrationsHistory\"','INSERT') FROM pg_roles WHERE rolname='uptime_urpo_runtime'", capture=True).stdout.strip()
     assert privileges == 'f|f|f|f|f', privileges
     # Retired synthetic rows are never checked and do not alter private operator configuration.
-    stack.sql('''INSERT INTO monitored_services ("Id","Name","Url","Enabled","Retired","IntervalSeconds","TimeoutSeconds","ExpectedStatusCode","FailureThreshold","SlowResponseThresholdMs","RegisteredAtUtc","ConsecutiveFailures") VALUES ('deployment-fixture','Deployment fixture','https://example.com/',false,true,60,10,200,3,2000,now(),0) ON CONFLICT DO NOTHING;
-INSERT INTO monitoring_periods ("Id","ServiceId","StartedAtUtc","EndedAtUtc","Url","Enabled","IntervalSeconds","TimeoutSeconds","ExpectedStatusCode","FailureThreshold","SlowResponseThresholdMs") VALUES (900001,'deployment-fixture',now()-interval '5 minutes',now(),'https://example.com/',true,60,10,200,3,2000) ON CONFLICT DO NOTHING;
-INSERT INTO check_results ("Id","ServiceId","MonitoringPeriodId","CheckedAtUtc","CompletedAtUtc","DurationMs","StatusCode","Success") VALUES (900001,'deployment-fixture',900001,now(),now(),123,200,true) ON CONFLICT DO NOTHING;
-INSERT INTO incidents ("Id","ServiceId","FirstFailureAtUtc","ConfirmedAtUtc","EndedAtUtc","Resolution","HasMonitoringGaps") VALUES (900001,'deployment-fixture',now()-interval '3 minutes',now()-interval '1 minute',now(),'Recovered',false) ON CONFLICT DO NOTHING;''')
+    seed_fixture(stack)
     before = stack.counts('uptime_urpo')
     stack.compose('stop', 'app')
     identifier = stack.compose('ps', '-aq', 'app', capture_output=True, text=True).stdout.strip()

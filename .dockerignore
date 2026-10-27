@@ -26,3 +26,9 @@ frontend/src/test-setup.ts
 **/bin/**
 **/obj/**
 frontend/dist/**
+**/secrets.json
+**/.env
+**/.env.*
+**/*.pfx
+**/*.p12
+**/*.key

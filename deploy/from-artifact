@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Verify a downloaded GitHub deployment candidate and promote its exact image without rebuilding."""
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import re
+import subprocess
+from release_artifact import github,validate_download
+
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--artifact',type=Path,required=True)
+parser.add_argument('--repository',required=True)
+parser.add_argument('--run-id',type=int,required=True)
+parser.add_argument('--host',required=True)
+parser.add_argument('--directory',required=True)
+parser.add_argument('--port',type=int,required=True)
+args=parser.parse_args()
+if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',args.repository) or args.run_id<=0:parser.error('Invalid repository/run ID')
+if not re.fullmatch(r'[A-Za-z0-9_.@-]+',args.host) or args.host.startswith('-') or not 1024<=args.port<=65535:parser.error('Invalid SSH destination/port')
+root=Path(__file__).resolve().parent.parent
+run=github(f'repos/{args.repository}/actions/runs/{args.run_id}')
+manifest=validate_download(args.artifact,run,args.repository,args.run_id)
+if subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True):raise SystemExit('Use a clean checkout before delivery')
+if subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()!=manifest['commit']:raise SystemExit('Check out the exact candidate commit before delivery')
+with (args.artifact/'image.tar').open('rb') as source:subprocess.run(['docker','image','load'],stdin=source,check=True)
+info=json.loads(subprocess.check_output(['docker','image','inspect',manifest['image']]))[0]
+if info['Id']!=manifest['imageId'] or info['Architecture']!='amd64' or info['Config'].get('Labels',{}).get('org.opencontainers.image.revision')!=manifest['commit']:raise SystemExit('Loaded image identity/source mismatch')
+migrations=json.loads(subprocess.check_output(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--entrypoint','dotnet',manifest['image'],'UptimeUrpo.Api.dll','--schema-migrations'],text=True))
+if migrations!=manifest['migrations']:raise SystemExit('Loaded image schema mismatch')
+loader=importlib.machinery.SourceFileLoader('publisher',str(root/'deploy/publish'))
+spec=importlib.util.spec_from_loader(loader.name,loader);publisher=importlib.util.module_from_spec(spec);loader.exec_module(publisher)
+publisher.install_release(args.host,args.directory,args.port,manifest['image'],manifest['commit'],args.artifact/'source.tar',expected_image_id=manifest['imageId'])

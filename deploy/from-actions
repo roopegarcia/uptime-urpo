@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Download a successful manual GitHub candidate, verify it, then deploy over SSH from this Mac."""
+import argparse
+import os
+from pathlib import Path
+import re
+import shutil
+import secrets
+import subprocess
+import sys
+from release_artifact import github,validate_run,unpack_download
+
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--repository',required=True)
+parser.add_argument('--run-id',type=int,required=True)
+parser.add_argument('--archive',type=Path,help='Optional ZIP downloaded from the matching GitHub run in a signed-in browser')
+parser.add_argument('--host',required=True)
+parser.add_argument('--directory',required=True)
+parser.add_argument('--port',type=int,required=True)
+args=parser.parse_args()
+if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',args.repository) or args.run_id<=0:parser.error('Invalid repository/run ID')
+os.umask(0o077)
+run=github(f'repos/{args.repository}/actions/runs/{args.run_id}')
+validate_run(run,args.repository,args.run_id)
+artifacts=github(f'repos/{args.repository}/actions/runs/{args.run_id}/artifacts?per_page=100')['artifacts']
+candidates=[item for item in artifacts if item['name']=='deployment-'+run['head_sha'] and not item['expired']]
+if not candidates:raise SystemExit('No unexpired deployment candidate; rerun the manual workflow')
+artifact=max(candidates,key=lambda item:item['id'])
+directory=Path(__file__).resolve().parent.parent/'.local/ci-downloads'/f'{args.run_id}-{secrets.token_hex(4)}'
+directory.mkdir(parents=True,mode=0o700)
+archive=directory/'candidate.zip'
+if args.archive:
+    with args.archive.open('rb') as source, archive.open('xb') as output:shutil.copyfileobj(source,output)
+else:
+    with archive.open('xb') as output:
+        subprocess.run(['gh','api',f'repos/{args.repository}/actions/artifacts/{artifact["id"]}/zip'],stdout=output,check=True)
+unpack_download(archive,directory,artifact.get('digest',''))
+root=Path(__file__).resolve().parent.parent
+subprocess.run(['git','cat-file','-e',run['head_sha']+'^{commit}'],cwd=root,check=True)
+checkout=root/'.local/ci-checkouts'/(run['head_sha']+'-'+secrets.token_hex(4))
+checkout.parent.mkdir(parents=True,mode=0o700,exist_ok=True)
+subprocess.run(['git','worktree','add','--detach',str(checkout),run['head_sha']],cwd=root,check=True)
+try:
+    subprocess.run([sys.executable,str(checkout/'deploy/from-artifact'),'--artifact',str(directory),'--repository',args.repository,'--run-id',str(args.run_id),'--host',args.host,'--directory',args.directory,'--port',str(args.port)],check=True)
+finally:
+    # No force: preserve unexpected edits rather than discarding them.
+    subprocess.run(['git','worktree','remove',str(checkout)],cwd=root,check=False)
+

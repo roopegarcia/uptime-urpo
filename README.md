@@ -14,7 +14,7 @@ ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc
 
 Open **http://127.0.0.1:5081/**. This uses the NUC application; Vite and a local API are unnecessary. The existing SSH alias needs the explicit `roope` account. No public hostname or Cloudflare rule was added. Daily backup scheduling is installed; off-host copies are currently manual.
 
-GitHub Actions CI and workflow-driven delivery remain M7 and require the next approval. [The roadmap](docs/ROADMAP.md) keeps later work distinct.
+M7 CI and delivery tooling is implemented and locally verified; hosted GitHub runs and artifact promotion are pending first-push verification. The selected route keeps CI on GitHub and deployment on this Mac over SSH. See [CI and delivery](docs/CI-AND-DELIVERY.md) and [M7 evidence](docs/MILESTONE-7.md). [The roadmap](docs/ROADMAP.md) keeps later work distinct.
 
 ## Application
 

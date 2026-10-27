@@ -37,6 +37,67 @@ def release_lock(host, base):
         process.wait()
 
 
+def preflight_remote(host,base,port):
+    project = 'uptime-urpo-production'
+    preflight = '''import json,pathlib,platform,socket,sys
+base=pathlib.Path(sys.argv[1]); port=int(sys.argv[2]); project=sys.argv[3]
+assert platform.machine()=="x86_64", "Expected the inspected Intel host"
+assert base.is_absolute() and base.name=="uptime-urpo" and base.resolve().is_relative_to(pathlib.Path.home()/"apps"), "Unsafe app directory"
+marker=base/".uptime-urpo"
+assert not base.exists() or (marker.is_file() and marker.read_text().strip()==project), "Existing directory is not owned by this publisher"
+settings=base/"state/settings.json"
+if settings.exists():
+ config=json.loads(settings.read_text()); assert config["project"]==project and config["port"]==port
+else:
+ with socket.socket() as probe: probe.bind(("127.0.0.1",port))
+print("Host/path/loopback-port preflight passed")'''
+    remote(host, ['python3', '-c', preflight, base, port, project])
+    remote(host, ['docker', 'info', '--format', '{{.OSType}} {{.Architecture}}'])
+
+
+def install_release(host,base,port,image,release,archive,targets_file=None,expected_image_id=None):
+    preflight_remote(host,base,port)
+    expected_image_id = expected_image_id or subprocess.check_output(['docker','image','inspect','--format','{{.Id}}',image],text=True).strip()
+    destination = base + '/releases/' + release
+    prepare = '''import pathlib,sys
+base=pathlib.Path(sys.argv[1]); assert not base.exists() or (base/".uptime-urpo").read_text().strip()=="uptime-urpo-production"; base.mkdir(mode=0o700,parents=True,exist_ok=True)
+marker=base/".uptime-urpo"
+if not marker.exists(): marker.write_text("uptime-urpo-production\\n")
+(base/"releases"/sys.argv[2]).mkdir(mode=0o700,parents=True,exist_ok=True)'''
+    remote(host, ['python3', '-c', prepare, base, release])
+    with release_lock(host, base):
+        with archive.open('rb') as source:
+            remote(host, ['tar', '--no-same-owner', '-xf', '-', '-C', destination], stdin=source)
+        # Stream the image to Docker, never through a world-readable remote temporary archive.
+        save = subprocess.Popen(['docker', 'image', 'save', image], stdout=subprocess.PIPE)
+        try: remote(host, ['docker', 'image', 'load'], stdin=save.stdout)
+        finally:
+            save.stdout.close()
+            if save.wait() != 0: raise SystemExit('Image transfer failed')
+        state = base + '/state'
+        initialize = '''import pathlib,subprocess,sys
+state=pathlib.Path(sys.argv[1])
+if not state.exists(): subprocess.run(["python3",sys.argv[2],"init","--state",str(state),"--project","uptime-urpo-production","--port",sys.argv[3],"--image",sys.argv[4]],check=True)'''
+        remote(host, ['python3', '-c', initialize, state, destination + '/deploy/ops.py', port, image])
+        if targets_file:
+            monitoring = json.loads(targets_file.read_text())['Monitoring']
+            if monitoring.get('Target') and not monitoring.get('Targets'):
+                monitoring['Targets'] = [monitoring.pop('Target')]
+            configure = '''import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])/"secrets/runtime.json"
+data=json.loads(p.read_text()); data["Monitoring"]=json.load(sys.stdin)
+p.chmod(0o600); p.write_text(json.dumps(data,indent=2)+"\\n"); p.chmod(0o444)'''
+            remote(host, ['python3', '-c', configure, state], input=json.dumps(monitoring), text=True)
+        received = remote(host, ['docker','image','inspect','--format','{{.Id}}',image],capture_output=True,text=True).stdout.strip()
+        if received != expected_image_id: raise SystemExit('Transferred image identity mismatch; no migration started.')
+        remote(host, ['python3', destination + '/deploy/ops.py', 'up', '--state', state, '--image', image])
+        switch = '''import os,pathlib,sys
+base=pathlib.Path(sys.argv[1]); temp=base/(".current-"+sys.argv[2])
+if temp.is_symlink(): temp.unlink()
+temp.symlink_to("releases/"+sys.argv[2]); os.replace(temp,base/"current")'''
+        remote(host, ['python3', '-c', switch, base, release])
+    print(f'Released {release}; loopback origin 127.0.0.1:{port}. Verify access and restore separately.')
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', required=True, help='Example: roope@nuc (the alias alone uses a different user)')
@@ -57,28 +118,9 @@ def main():
     release = sha + ('-dirty-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') if changes else '')
     image = 'uptime-urpo:' + release
     base = args.directory
-    project = 'uptime-urpo-production'
-    preflight = '''import json,pathlib,platform,socket,sys
-base=pathlib.Path(sys.argv[1]); port=int(sys.argv[2]); project=sys.argv[3]
-assert platform.machine()=="x86_64", "Expected the inspected Intel host"
-assert base.is_absolute() and base.name=="uptime-urpo" and base.resolve().is_relative_to(pathlib.Path.home()/"apps"), "Unsafe app directory"
-marker=base/".uptime-urpo"
-assert not base.exists() or (marker.is_file() and marker.read_text().strip()==project), "Existing directory is not owned by this publisher"
-settings=base/"state/settings.json"
-if settings.exists():
- config=json.loads(settings.read_text()); assert config["project"]==project and config["port"]==port
-else:
- with socket.socket() as probe: probe.bind(("127.0.0.1",port))
-print("Host/path/loopback-port preflight passed")'''
-    remote(args.host, ['python3', '-c', preflight, base, args.port, project])
-    remote(args.host, ['docker', 'info', '--format', '{{.OSType}} {{.Architecture}}'])
-    dotnet = shutil.which('dotnet') or str(Path.home() / '.dotnet/dotnet')
-    run([dotnet, 'restore', 'Uptime-Urpo.slnx', '--locked-mode'])
-    run([dotnet, 'test', 'Uptime-Urpo.slnx', '--no-restore'])
-    run(['python3', '-m', 'unittest', 'discover', '-s', 'deploy', '-p', 'test_*.py'])
-    for command in ['ci', 'test', 'run build', 'run format:check']:
-        run(['npm', '--prefix', 'frontend', *shlex.split(command)])
-    run(['docker', 'buildx', 'build', '--load', '--platform', 'linux/amd64', '--tag', image, '.'])
+    for part in ['backend','frontend','operations']:
+        run(['python3',str(ROOT/'scripts/verify.py'),'--part',part])
+    run(['docker', 'buildx', 'build', '--load', '--platform', 'linux/amd64', '--build-arg', 'REVISION='+subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(), '--tag', image, '.'])
     staging = ROOT / '.local' / 'releases' / release
     staging.mkdir(parents=True, mode=0o700, exist_ok=True)
     archive = staging / 'source.tar'
@@ -92,43 +134,8 @@ print("Host/path/loopback-port preflight passed")'''
         with archive.open('wb') as output: run(['git', 'archive', 'HEAD'], stdout=output)
     if not changes and subprocess.check_output(['git','status','--porcelain'],text=True):
         raise SystemExit('Checkout changed during build; no files uploaded.')
-    destination = base + '/releases/' + release
-    prepare = '''import pathlib,sys
-base=pathlib.Path(sys.argv[1]); assert not base.exists() or (base/".uptime-urpo").read_text().strip()=="uptime-urpo-production"; base.mkdir(mode=0o700,parents=True,exist_ok=True)
-marker=base/".uptime-urpo"
-if not marker.exists(): marker.write_text("uptime-urpo-production\\n")
-(base/"releases"/sys.argv[2]).mkdir(mode=0o700,parents=True,exist_ok=True)'''
-    remote(args.host, ['python3', '-c', prepare, base, release])
-    with release_lock(args.host, base):
-        with archive.open('rb') as source:
-            remote(args.host, ['tar', '--no-same-owner', '-xf', '-', '-C', destination], stdin=source)
-        # Stream the image to Docker, never through a world-readable remote temporary archive.
-        save = subprocess.Popen(['docker', 'image', 'save', image], stdout=subprocess.PIPE)
-        try: remote(args.host, ['docker', 'image', 'load'], stdin=save.stdout)
-        finally:
-            save.stdout.close()
-            if save.wait() != 0: raise SystemExit('Image transfer failed')
-        state = base + '/state'
-        initialize = '''import pathlib,subprocess,sys
-state=pathlib.Path(sys.argv[1])
-if not state.exists(): subprocess.run(["python3",sys.argv[2],"init","--state",str(state),"--project","uptime-urpo-production","--port",sys.argv[3],"--image",sys.argv[4]],check=True)'''
-        remote(args.host, ['python3', '-c', initialize, state, destination + '/deploy/ops.py', args.port, image])
-        if args.targets_file:
-            monitoring = json.loads(args.targets_file.read_text())['Monitoring']
-            if monitoring.get('Target') and not monitoring.get('Targets'):
-                monitoring['Targets'] = [monitoring.pop('Target')]
-            configure = '''import json,pathlib,sys
-p=pathlib.Path(sys.argv[1])/"secrets/runtime.json"
-data=json.loads(p.read_text()); data["Monitoring"]=json.load(sys.stdin)
-p.chmod(0o600); p.write_text(json.dumps(data,indent=2)+"\\n"); p.chmod(0o444)'''
-            remote(args.host, ['python3', '-c', configure, state], input=json.dumps(monitoring), text=True)
-        remote(args.host, ['python3', destination + '/deploy/ops.py', 'up', '--state', state, '--image', image])
-        switch = '''import os,pathlib,sys
-base=pathlib.Path(sys.argv[1]); temp=base/(".current-"+sys.argv[2])
-if temp.is_symlink(): temp.unlink()
-temp.symlink_to("releases/"+sys.argv[2]); os.replace(temp,base/"current")'''
-        remote(args.host, ['python3', '-c', switch, base, release])
-    print(f'Released {release}; loopback origin 127.0.0.1:{args.port}. Verify access and restore separately.')
+    install_release(args.host,base,args.port,image,release,archive,args.targets_file)
+
 
 
 if __name__ == '__main__':

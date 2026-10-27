@@ -30,3 +30,6 @@ backups/
 .DS_Store
 *.user
 *.suo
+
+# CI reports and release candidates (never source/configuration)
+artifacts/

@@ -98,3 +98,7 @@ A monitor on this NUC cannot independently report the NUC's own power/network lo
 ## Runtime diagnostic note
 
 The minimal .NET image does not include optional Kerberos libraries. Npgsql 10 may log `Cannot load library libgssapi_krb5.so.2` while trying its default GSS preference, then connect successfully using the configured password authentication. This handled fallback is [documented by Npgsql](https://www.npgsql.org/doc/security#gss-session-encryption-gss-api); migration/readiness success was verified. PostgreSQL traffic stays on this host's isolated database network. Moving the database off-host requires a separately reviewed encrypted transport configuration.
+
+## CI artifact delivery and guarded rollback (M7)
+
+The operator selected GitHub-hosted validation/preparation and Mac-side SSH promotion. See [CI and delivery](CI-AND-DELIVERY.md) for manual workflow dispatch, exact-artifact verification, isolated worktrees, and migration-guarded application rollback. M6's deployed baseline remains valid until a candidate is explicitly promoted; file creation does not change the running image.
