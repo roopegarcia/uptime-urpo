@@ -194,6 +194,13 @@ class Stack:
         name = 'urpo_restore_' + secrets.token_hex(6)
         self.sql(f'CREATE DATABASE "{name}" OWNER uptime_urpo_migrator')
         try:
+            # Default privileges are per database, not inherited from the source database.
+            self.sql('''REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA public TO uptime_urpo_migrator;
+GRANT USAGE ON SCHEMA public TO uptime_urpo_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE uptime_urpo_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO uptime_urpo_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE uptime_urpo_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO uptime_urpo_runtime;''', name)
+
             with path.open('rb') as source:
                 self.compose('exec', '-T', 'db', 'pg_restore', '-U', 'postgres', '-d', name,
                              '--role=uptime_urpo_migrator', '--no-owner', '--no-privileges', '--exit-on-error', stdin=source)

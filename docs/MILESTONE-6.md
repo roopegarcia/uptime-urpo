@@ -25,8 +25,8 @@ Authenticated using `roope@nuc`; the alias's default account was rejected. The N
 - Graceful application stop exited zero without OOM; restart retained rows. Database interruption left liveness up and readiness at 503; readiness and data recovered after restart.
 - Tests prove a failed backup prevents migrations/app startup, corrupt archives cause no restore database creation, existing state/volumes prevent credential regeneration, remote Python snippets compile, and scheduled-day state updates only after success.
 
-The first draft checks found and fixed a portable lockfile/RID mismatch, Python 3.9's lack of `hashlib.file_digest`, and an unquoted YAML tmpfs list. Verification uses separate project volumes and preserves unrelated services/data.
+The first draft checks found and fixed a portable lockfile/RID mismatch, Python 3.9's lack of `hashlib.file_digest`, an unquoted YAML tmpfs list, and per-database default grants needed by a restored runtime identity. Verification uses separate project volumes and preserves unrelated services/data.
 
 ## NUC evidence
 
-Pending: native AMD64 readiness and target checks, loopback/LAN access boundaries, SSH-forwarded UI, restart continuity, restored production backup, schedule installation, and off-host recovery copy. Physical-host reboot and public/Cloudflare access are outside the initial SSH-only verification.
+First NUC release is healthy, with real HTTP 200 checks and the overview/details/history UI verified through SSH. Direct LAN access to port 8108 was refused/timed out. Pending: install the corrected restore helper release, verify native restart continuity and a production-backup restore, install the schedule, and make the off-host recovery copy. Physical-host reboot and public/Cloudflare access are outside the initial SSH-only verification.
