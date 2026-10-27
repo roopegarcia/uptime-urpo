@@ -4,28 +4,36 @@ A C#/.NET learning and portfolio project building a private, self-hosted uptime 
 
 ## Current status
 
-**Milestone 5 complete: the React dashboard.** Overview, service details, interactive response charts, incidents, availability/coverage, themes, and responsive controls now use the read-only monitoring API. See [the M5 walkthrough and evidence](docs/MILESTONE-5.md).
+**Milestone 6 complete: privately deployed on the NUC.** The application serves its dashboard/API in one non-root container alongside an isolated PostgreSQL container. Backup-before-migration releases, daily backup scheduling, a separate-database restore drill, restart continuity, and SSH-only access are implemented and verified. See [M6 evidence](docs/MILESTONE-6.md) and [deployment/recovery commands](docs/DEPLOYMENT.md).
 
-Deployment and CI remain planned. Nothing has been installed on or deployed to the NUC. [Milestone 6](docs/ROADMAP.md#m6--docker-and-nuc-operations) needs approval and an inspection of the actual host/access setup first.
+To open the deployed dashboard, keep an SSH tunnel running:
 
-## Planned application
+```sh
+ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc
+```
+
+Open **http://127.0.0.1:5081/**. This uses the NUC application; Vite and a local API are unnecessary. The existing SSH alias needs the explicit `roope` account. No public hostname or Cloudflare rule was added. Daily backup scheduling is installed; off-host copies are currently manual.
+
+GitHub Actions CI and workflow-driven delivery remain M7 and require the next approval. [The roadmap](docs/ROADMAP.md) keeps later work distinct.
+
+## Application
 
 One ASP.NET Core application hosts a read-only API and background HTTP checker. PostgreSQL stores results, current snapshots, configuration periods, and incidents. The React dashboard presents current health, history, coverage, and incidents.
 
-The first deployment will be private. Targets will be defined in private operator configuration; there will be no public URL submission or administration endpoints. The production application will serve the frontend and API from the same origin.
+The first deployment is private through an authenticated SSH tunnel. Targets are defined in private operator configuration; there are no public URL submission or administration endpoints. The production application serves the frontend and API from the same origin.
 
 The selected stack is .NET 10 LTS / C# 14, ASP.NET Core Minimal APIs, EF Core 10 with Npgsql 10, PostgreSQL 18, and React / TypeScript / Vite. Testing will use xUnit, ASP.NET Core integration testing, and disposable PostgreSQL containers. Exact package versions will be verified when their milestone introduces them.
 
 ## Start here
 
-For a walkthrough you can also use to teach the project, read [the tutorial](tutorial.md): Parts 1–4 cover the API, worker, and persistence; Part 5 follows query contracts, coverage, and incidents; Part 6 builds and teaches the dashboard.
+For a walkthrough you can also use to teach the project, read [the tutorial](tutorial.md): Parts 1–4 cover the API, worker, and persistence; Part 5 follows query contracts, coverage, and incidents; Part 6 builds the dashboard; Part 7 deploys it privately and teaches backup/recovery.
 
 1. Follow [local development setup](docs/LOCAL-DEVELOPMENT.md).
 2. Read [architecture and operational decisions](docs/ARCHITECTURE.md).
 3. Read [C# for Roope](CSHARP-FOR-ROOPE.md) before Milestone 1.
 4. Review [milestones and acceptance criteria](docs/ROADMAP.md).
 
-With Docker Desktop running and the SDK available, start locally:
+For native local development, with Docker Desktop running and the SDK available:
 
 ```sh
 export DOTNET_ROOT="$HOME/.dotnet"
@@ -66,9 +74,9 @@ Local database credentials live in ignored `.local/database.env`; preserve this 
 
 ## Portfolio claims and limitations
 
-Implemented and locally verified: secure monitoring, durable PostgreSQL results/incidents, retention, observed availability/coverage, validated read APIs, OpenAPI, and the React dashboard. Real PostgreSQL tests cover rollback, restart, incidents, statistics, and HTTP boundaries. Chrome checks used real local data and isolated synthetic failure scenarios, with desktop/mobile viewport layouts and keyboard/pointer chart controls. Physical-device touch and deployment remain unverified. The API has no built-in authentication; keep it on loopback and run one monitoring instance per database.
+Implemented and locally verified: secure monitoring, durable PostgreSQL results/incidents, retention, availability/coverage, bounded APIs/OpenAPI, the React dashboard, and container/recovery tooling. Deployed and operationally checked: native AMD64 readiness, real target checks, loopback/SSH access, database isolation, graceful restart continuity, backup restoration into a separate database, and an off-host recovery copy. These checks do not establish a long-running production reliability history.
 
-Current verification: 25 frontend tests and 199 backend cases (144 unit, 55 integration), frontend production build, and backend Release publish. See the dated [M5 record](docs/MILESTONE-5.md#verification-record--2026-10-27) for limits and commands.
+Current verification: 199 backend cases (144 unit, 55 integration), 25 frontend tests, and seven operations tests; production image builds and real container/recovery checks. Physical-device touch, a full host reboot, full main-database replacement, an unattended daily backup, and automatic off-host replication remain unverified or unimplemented as detailed in [M6](docs/MILESTONE-6.md). The API has no built-in authentication; keep its origin private and run one monitoring instance per database.
 
 A monitor running on the same NUC as its targets cannot independently report NUC power loss, network loss, or its own failure. Missing monitoring data must stay visible as gaps. A successful HTTP response proves only that the configured expectation was met, not that every application feature works. An external observer can complement this project later.
 

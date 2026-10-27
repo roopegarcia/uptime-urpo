@@ -1,6 +1,6 @@
 # Architecture and decisions
 
-Status: accepted design direction. M0–M5 are complete: secure monitoring, PostgreSQL persistence/incidents, bounded read APIs, and a React dashboard. Production packaging and deployment remain planned. See [the M5 implementation and evidence](MILESTONE-5.md) and [the M4 API contract](MILESTONE-4.md).
+Status: accepted design direction. M0–M6 are complete: secure monitoring, PostgreSQL persistence/incidents, bounded read APIs, and a React dashboard. The stack is privately deployed on the inspected NUC through SSH. See [M6 deployment evidence](MILESTONE-6.md) and [the M5 implementation](MILESTONE-5.md) and [the M4 API contract](MILESTONE-4.md).
 
 ## System shape
 
@@ -11,7 +11,7 @@ flowchart LR
     Checker --> Targets[Approved public HTTPS targets]
     Checker --> Results[Result and incident processing]
     Results --> Database[(PostgreSQL)]
-    Browser[Private React dashboard] --> Access[Existing access layer]
+    Browser[Private React dashboard] --> Access[Authenticated SSH tunnel]
     Access --> App[ASP.NET Core read-only API and static frontend]
     App --> Database
 ```
@@ -176,3 +176,15 @@ Hash routes keep client navigation at `/`; ASP.NET Core serves default/static fi
 The SVG chart uses the API's buckets directly. It splits lines at null HTTP timing, preserves missing/disabled buckets, and exposes a keyboard range input and semantic table. It performs no uptime recalculation or client-side gap filling. Statistics use the server's availability/coverage values. History bounds derive from the server snapshot and normalize both timestamps to JavaScript millisecond precision.
 
 Browser times are local with zone labels; query windows remain elapsed UTC hours. Incidents show elapsed sampled-incident time with gap uncertainty. Themes use CSS variables and best-effort local storage. Synthetic browser fixtures are isolated in a development-only server and never imported by the app entry point.
+
+## Private deployment (M6)
+
+One non-root application container serves the UI/API/worker on the NUC's loopback port 8108. PostgreSQL runs as its non-root image user on a project-internal network with no host port; the app also has a dedicated outbound network. A short-lived migration container uses a separate configuration secret and never runs the monitoring worker. Host administrators/Docker users remain trusted.
+
+A multi-stage image builds the frontend and backend without including local settings, credentials, or fixtures. Portable framework-dependent .NET output supports native ARM64 and AMD64 runtime images. Read-only filesystems, bounded temporary mounts/resources/logs, readiness probes, graceful stop, and restart policies constrain operation. Readiness failure alone does not restart an otherwise live process.
+
+Releases use a clean Git snapshot by default, validation before upload, remote/operation locks, a quiescent logical backup before explicit migration, and readiness before switching the current source link. Private state and the database volume survive releases. File-backed secrets grant only runtime config to the app and migration config to the migration task.
+
+The first access layer is existing SSH authentication and an explicitly loopback-bound local forward. Direct LAN access to the origin was blocked; no Cloudflare/Nginx route was created. Changing that boundary requires inspecting the intended Access policy and verifying origin isolation again.
+
+Daily backups use Europe/Helsinki without changing the host timezone. Recovery drills restore into a separate generated database with migration ownership and per-database runtime grants, validate data/access, then drop only that copy. A manual owner-only off-host archive includes passwords/configuration needed for recovery. Image rollback cannot undo schema changes; a full database replacement remains a separately reviewed recovery operation. See [deployment commands and limits](DEPLOYMENT.md).

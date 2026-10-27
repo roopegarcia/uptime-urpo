@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–6 are complete. Parts 7–9 are planned.** The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Deployment remains a later, separately approved step.
+Each part corresponds to one milestone. **Parts 1–7 are complete. Parts 8–9 are planned.** The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -1009,9 +1009,129 @@ Ask your audience:
 
 ## Part 7 — Deploy privately to the NUC
 
-**Milestone 6 · Planned; not built**
+**Milestone 6 · Complete, privately deployed, and operationally checked**
 
-Inspect the real server before writing host-specific instructions. Teach production images, Compose, private access, readiness, backups, restores, and recovery. Document actual approved deployment commands and evidence without exposing secrets or private infrastructure details.
+### What we built
+
+The NUC now runs the real monitoring application and PostgreSQL in their own containers. ASP.NET Core serves the built React interface and API together. Docker keeps these containers running without Vite or a native development terminal.
+
+We added a production Dockerfile, isolated Compose networking, separate runtime/migration secrets, readiness checks, resource/log limits, release commands, backup-before-migration, a daily backup schedule, a restore drill into a separate database, and a private off-host recovery copy. The first access layer is SSH; no public hostname or Cloudflare rule was added.
+
+This is deployment evidence, not a promise of indefinite reliability. The [M6 record](docs/MILESTONE-6.md) separates local tests, native Intel-host checks, private access, recovery checks, and remaining limits.
+
+### What you need first
+
+Parts 1–6 and authorized SSH access to the inspected NUC. We checked the actual Debian version, architecture, Docker/Compose, storage/memory, occupied ports, and existing proxy/services before deployment. The working account is `roope@nuc`; the alias's configured default account was rejected. We preserved the shared host's other services.
+
+To use the deployed application from the Mac:
+
+```sh
+ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc
+```
+
+Keep that terminal open, then visit **http://127.0.0.1:5081/**. You need neither a local API nor Vite for this deployment. The application continues monitoring on the NUC even after you close the tunnel; the tunnel only provides access to its private interface.
+
+### Step 1: Distinguish images, containers, and volumes
+
+An **image** is the packaged application/runtime. A **container** is an instance running that image. A **volume** holds PostgreSQL data independently of the container's writable layer.
+
+Replacing an application image must not replace the database volume. Likewise, rebuilding a database container does not reset passwords stored in an initialized database. Preserve its original configuration and credentials with its volume.
+
+[The Dockerfile](Dockerfile) has three stages: Node builds the frontend; the .NET SDK publishes the backend with those assets; the runtime image receives only the published output. Production needs the runtime, not Node or the SDK.
+
+The output uses portable framework-dependent IL with `UseAppHost=false`, executed by `dotnet UptimeUrpo.Api.dll`. The initial architecture-specific restore conflicted with the existing portable lockfile. Publishing portable IL preserved locked restore and let us use native ARM64 and AMD64 runtime images without an unused native launcher.
+
+[.dockerignore](.dockerignore) keeps local settings, dependencies, generated output, and fixtures out of the build context. Git ignore alone does not protect Docker builds: the two tools need their own boundaries.
+
+**Teach it:** “Code belongs in the replaceable image; observations belong in the persistent volume; credentials belong in private state outside Git.”
+
+### Step 2: Follow the production network
+
+Read [Compose](deploy/compose.yaml). PostgreSQL joins only the internal database network and publishes no port. The app joins that network plus an outbound network so its checker can reach approved public HTTPS targets.
+
+Only the application publishes a host port, bound to NUC loopback at 8108. The SSH command forwards Mac loopback 5081 to it. Existing SSH authentication protects this access path; the application itself has no login system.
+
+We verified that the origin responds through authenticated SSH while a direct LAN connection to port 8108 was blocked/refused. A future Cloudflare route needs its own inspected Access policy and origin checks. A healthy local origin alone does not prove a public access layer is correct.
+
+### Step 3: Separate operating-system and database identities
+
+The application runs as the image's `app` user, PostgreSQL as `postgres`. Neither process runs as root. Read-only root filesystems, dropped capabilities, bounded temporary mounts, process/memory/CPU limits, and rotating logs constrain their operation.
+
+Database identities are a separate boundary. The runtime role can work with monitoring data but cannot create schema objects or migrate. The short-lived migration task receives its own secret and exits after applying migrations. Runtime writes to EF migration history are revoked afterward.
+
+Secrets are mounted as files, not baked into images or placed in the API. The host state/secrets directories are mode 0700; mounted files remain readable by the non-root users inside their assigned containers. Host administrators and Docker users remain trusted. The app container does not receive admin or migration passwords.
+
+[Program.cs](backend/UptimeUrpo.Api/Program.cs) reads an optional private configuration file selected by `UPTIME_CONFIG_FILE`, then applies environment/CLI precedence. Native local development continues to use its existing helper/configuration independently.
+
+### Step 4: Make readiness useful without starting another monitor
+
+Docker runs the application with `--health-check` to probe `/health/ready`. That early CLI path makes one bounded loopback HTTP request and exits; it does not build another host or start another monitoring worker.
+
+Liveness answers whether the process responds. Readiness additionally needs the database/schema. Stopping the isolated test database left `/health` at 200 and made readiness return 503. Restarting it restored readiness without inventing history.
+
+A health check marks a container healthy/unhealthy; Docker's restart policy handles process/container exits and daemon restarts. It does not automatically restart every live unhealthy process. Persistent unhealthiness still needs investigation.
+
+### Step 5: Trace a release and its failure boundary
+
+Read [publish](deploy/publish) and [Stack.release](deploy/ops.py). The default workflow requires a clean commit, runs verification, builds AMD64, transfers the source snapshot/image through SSH, and holds a release lock. The private state directory lives outside the replaceable release folders.
+
+```sh
+./deploy/publish --host roope@nuc --directory /home/roope/apps/uptime-urpo --port 8108 --targets-file backend/UptimeUrpo.Api/appsettings.Local.json
+```
+
+The optional file transfers only its approved `Monitoring` configuration. It does not replace production database credentials. Omitting it preserves existing production targets, or starts a new stack with no targets.
+
+The host-side sequence stops this app, starts/waits for its database, saves and validates a backup, runs explicit migrations with the migration identity, recreates the application, and checks readiness. Only then does `current` point to the new source release.
+
+A failed backup prevents migration. A failed migration does not trigger an automatic database rollback or discard the volume. The seven [operations tests](deploy/test_ops.py) cover failure ordering, corrupt archives, credential-regeneration guards, remote script syntax, and schedule behavior. Real container tests cover the actual database/runtime boundaries.
+
+**Explain it:** A release is more than copying files. It establishes which code ran, whether schema changes were deliberate, and which recovery point existed beforehand.
+
+### Step 6: Prove a backup by restoring it
+
+A successful `pg_dump` and a readable archive inventory are useful checks, but neither proves a restore works. [restore_check](deploy/ops.py) verifies the archive checksum, creates a uniquely named disposable database, restores with migration ownership, checks tables/runtime access, and compares row counts when the source app was stopped for the backup. It drops only that disposable database.
+
+A stronger test caught a subtle PostgreSQL rule: **default privileges are per database**. Restoring objects under the migration owner did not automatically grant the restricted runtime access in a new database. The drill now establishes those per-database defaults before restoration and verifies a runtime read afterward.
+
+The local isolated test includes synthetic service/history/incident rows. The real NUC restore used its actual backup and did not manufacture an incident: one service, one period, five checks, zero incidents, two migrations were recovered into a separate database. Restart then resumed monitoring and increased checks from five to six.
+
+Use [the deployment guide](docs/DEPLOYMENT.md#backups-and-restore-drill) for exact backup/restore commands. Never use the synthetic seeding script on production; it rejects production project names.
+
+### Step 7: Keep backups useful after deployment
+
+[The installer](deploy/install-backups.py) preserves existing crontab entries and adds one project-scoped hourly check. [scheduled_backup](deploy/ops.py) uses Europe/Helsinki to create one daily backup at/after 03:17, retry after failures, and avoid repeating the day's backup during autumn's repeated hour. We did not change the shared host's timezone.
+
+The schedule is installed and the scheduled helper was successfully invoked. Its next unattended execution remains future evidence. Logs are bounded to the last schedule check, and a marker records the last successful scheduled date.
+
+Backups on the same NUC do not protect against losing that machine or disk. Copy recovery data off-host:
+
+```sh
+./deploy/fetch-backups --host roope@nuc --state /home/roope/apps/uptime-urpo/state
+```
+
+The owner-only local tar includes database archives, checksum manifests, settings, and recovery passwords. Four archived database backups were copied and checked during M6. This is a manual copy, not automatic off-host replication. Keep it private and outside Git/shared folders; plan disk monitoring and archive retention rather than silently deleting old backups.
+
+### Step 8: State exactly what was verified
+
+M6 passed 199 backend, 25 frontend, and seven operations tests, plus real container checks. Native AMD64 checks on the NUC covered readiness, real target observations, non-root/read-only operation, network/port isolation, graceful app shutdown, database/app restart continuity, a separate-database restore, SSH-forwarded browser UI, backup schedule installation, and a private off-host copy.
+
+No physical host reboot, full replacement of the live database, public/Cloudflare access, physical phone test, load benchmark, or long-running reliability claim follows from these checks. An image rollback does not undo migrations; a full data recovery needs a separately reviewed plan and can lose observations newer than the chosen backup.
+
+A monitor on the NUC still cannot independently announce that the NUC itself lost power or connectivity. Missing samples remain uncertainty; an external observer is a future complement.
+
+### Teach this part
+
+Demonstrate the SSH-forwarded dashboard, then explain the Dockerfile stages, database volume, two database identities, release ordering, and restore result. Ask:
+
+1. Why doesn't a new app image erase history? **History lives in a persistent database volume.**
+2. Why keep migration credentials out of the app container? **Normal monitoring should not have schema-changing authority.**
+3. Does a checksum prove recoverability? **It proves matching bytes; an actual restore and access/data checks provide stronger evidence.**
+4. Why did runtime reads initially fail in the restored copy? **Default grants belonged to the original database and needed establishing in the new one.**
+5. Does closing the SSH tunnel stop monitoring? **No. It closes access from this Mac; the NUC containers keep running.**
+6. Does Docker restart every unhealthy process? **No. Health status and restart policy have distinct roles.**
+7. Does rolling back an image undo migrations? **No. Schema/data recovery needs its own compatible, reviewed procedure.**
+
+**Next:** Part 8 adds GitHub Actions validation and explicitly triggered delivery, after the next milestone approval.
 
 ## Part 8 — Automate checks and delivery
 

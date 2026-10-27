@@ -1,6 +1,6 @@
 # Milestone 6 — Production packaging and private NUC operations
 
-Status on 2026-10-27: production packaging and local verification complete; NUC deployment verification is in progress. M6 is not yet signed off. See [deployment commands and recovery boundaries](DEPLOYMENT.md).
+Status on 2026-10-27: complete and privately deployed to the inspected NUC through SSH-only access. M7 remains behind the next approval gate. See [deployment commands and recovery boundaries](DEPLOYMENT.md).
 
 ## Inspected host
 
@@ -18,7 +18,7 @@ Authenticated using `roope@nuc`; the alias's default account was rejected. The N
 
 ## Local verification
 
-- 144 backend unit and 55 integration cases pass; seven operations failure/schedule tests pass. Frontend checks are rerun by the publisher.
+- 144 backend unit, 55 integration, 25 frontend, and seven operations cases pass (231 total). The publisher reran these gates from clean commits.
 - Real ARM64 container checks passed: same-origin HTML/assets/API, API 404 Problem Details, non-root/read-only operation, healthy probe, loopback binding, no published database port, and no migration/admin secret in the app container.
 - Runtime is neither superuser nor database/role creator, cannot create public schema objects, and cannot write EF migration history.
 - Synthetic retired fixture rows were inserted only into `uptime-urpo-m6-check`, never into development or production. A stopped-app dump restored into a separate database with matching counts: one service, one period, one check, one incident, and two migrations. Restore uses migration ownership and verifies runtime reads. Only the disposable restore database was dropped.
@@ -29,4 +29,25 @@ The first draft checks found and fixed a portable lockfile/RID mismatch, Python 
 
 ## NUC evidence
 
-First NUC release is healthy, with real HTTP 200 checks and the overview/details/history UI verified through SSH. Direct LAN access to port 8108 was refused/timed out. Pending: install the corrected restore helper release, verify native restart continuity and a production-backup restore, install the schedule, and make the off-host recovery copy. Physical-host reboot and public/Cloudflare access are outside the initial SSH-only verification.
+Deployed application/tooling release: **`8b69d7e6e21c`**, after initial release `cdb674ff3ff8`. Later documentation commits do not imply a different running image.
+
+- Native AMD64 application/database containers are healthy. The approved configured target returned HTTP 200 and was UP; reads showed persisted history.
+- Both containers' non-root users and read-only roots were inspected. Application port binds only to loopback 8108; PostgreSQL has no published port. Direct Mac-to-NUC LAN connection to 8108 was blocked/refused.
+- Authenticated SSH forwarding to Mac loopback 5081 serves the actual overview, detail, chart, and API. Chrome showed the deployed data. There is no new public hostname or changed Cloudflare/Nginx rule.
+- Graceful app stop exited zero. A database-container restart preserved all rows. A quiescent production backup restored into a separate database: one service, one period, five checks, zero incidents, two migrations. Runtime reads succeeded in the restored copy; it was then dropped. The live database was never overwritten.
+- Application restart resumed monitoring: checks increased from five to six while the service/period/migrations stayed intact. Production incidents were not manufactured for testing; non-empty incident restoration was covered in the isolated local fixture.
+- A project-scoped cron entry was installed. The scheduled helper was invoked successfully and made a backup. Its unattended execution at the next eligible hourly tick remains future operational evidence.
+- Four database archives plus configuration/recovery passwords were copied off-host to an ignored owner-only local tar. All four archive checksums matched their manifests. This copy is manual; automatic off-host replication is not implemented.
+
+No physical-host reboot, disk-failure recovery, public/Cloudflare access, full main-database replacement, load benchmark, or physical-device UI test was performed. Existing host services and the development database were preserved. An SSH tunnel is required to access the deployed dashboard; the app itself has no built-in authentication.
+
+## Reproduce verification
+
+```sh
+python3 -m unittest discover -s deploy -p 'test_*.py'
+python3 deploy/verify-local.py --state .local/m6-check
+```
+
+The isolated check stack must already exist and be running; see [the tools guide](../deploy/README.md). The publisher runs locked restore, backend/frontend tests, type-check/build, formatting, and the AMD64 image build before transfer. Root `git diff --check`, .NET formatting, Python/shell syntax, documentation links, and secret/build-artifact exclusions were also checked.
+
+The restore permission fix matters: PostgreSQL default privileges belong to each database. Owning a restored schema is insufficient to let the restricted runtime read it. The drill now establishes the migration role's default grants in the disposable database before restoration and verifies runtime access afterward.

@@ -102,3 +102,7 @@ npm --prefix frontend run dev
 ```
 
 Open http://127.0.0.1:5173/. Node 26.9.0 and npm 12.2.0 were verified; `.nvmrc`, exact dependencies, and the npm lockfile live in `frontend/`. Vite proxies API calls locally. No CORS change is needed. `npm --prefix frontend test` runs frontend checks; `npm --prefix frontend run build` type-checks and builds assets. Restart the backend after building to serve the built dashboard directly at port 5080. See [M5](MILESTONE-5.md) for publishing, synthetic browser scenarios, and verification limits.
+
+## Use the NUC deployment instead of local development
+
+The deployed application needs neither Vite nor a local API. Use `ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc`, then open http://127.0.0.1:5081/. Keep the tunnel open. The explicit SSH account is required with the existing alias. See [deployment/access/recovery](DEPLOYMENT.md). Local development commands remain independent of that deployment and use their own database.

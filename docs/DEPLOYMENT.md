@@ -1,6 +1,6 @@
 # Private NUC deployment and recovery
 
-M6 is in progress. Portable container and recovery checks have passed locally; the dated M6 record distinguishes later NUC evidence. These commands are specific to the inspected host, not permission to change unrelated applications.
+M6 is complete and privately deployed. The [dated M6 record](MILESTONE-6.md) separates local, native-host, and access/recovery evidence. These commands are specific to the inspected host, not permission to change unrelated applications.
 
 ## Inspected destination
 
@@ -41,7 +41,7 @@ On the Mac, keep this terminal open:
 ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc
 ```
 
-Then open **http://127.0.0.1:5081/**. Backend and frontend share one origin. The forwarded port binds only Mac loopback. Vite, Node, and a native .NET process are not needed to use this deployed dashboard.
+Then open **http://127.0.0.1:5081/**. Backend and frontend share one origin. The forwarded port binds only Mac loopback. The current SSH alias uses the home-network route; access from elsewhere needs an approved SSH/VPN path. Vite, Node, and a native .NET process are not needed to use this deployed dashboard.
 
 Verify the NUC origin separately:
 
@@ -94,3 +94,7 @@ For data recovery: stop the app, preserve the damaged/newer database and state, 
 Preserve the original secrets with the volume. Recreating passwords does not reset an initialized PostgreSQL volume. Runtime credentials cannot perform schema migrations; migration credentials are mounted only into the short-lived migration container. Never weaken TLS/SSRF protections or an access policy to make a target green.
 
 A monitor on this NUC cannot independently report the NUC's own power/network loss. Missing data remains a gap; an external observer is still a future complement.
+
+## Runtime diagnostic note
+
+The minimal .NET image does not include optional Kerberos libraries. Npgsql 10 may log `Cannot load library libgssapi_krb5.so.2` while trying its default GSS preference, then connect successfully using the configured password authentication. This handled fallback is [documented by Npgsql](https://www.npgsql.org/doc/security#gss-session-encryption-gss-api); migration/readiness success was verified. PostgreSQL traffic stays on this host's isolated database network. Moving the database off-host requires a separately reviewed encrypted transport configuration.

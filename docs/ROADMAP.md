@@ -1,6 +1,6 @@
 # Milestones and acceptance criteria
 
-Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M5 are complete and locally verified; M6–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27), and [M5](MILESTONE-5.md#verification-record--2026-10-27).
+Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M6 are complete; M6 is privately deployed with native-host/access/recovery checks. M7–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27), [M5](MILESTONE-5.md#verification-record--2026-10-27), and [M6](MILESTONE-6.md).
 
 At every milestone:
 
@@ -57,6 +57,8 @@ Verify/pin React, TypeScript, Vite, and supported Node tooling; add frontend che
 Acceptance: frontend checks/build pass. Browser verification covers loading, empty, error, stale and gap states, themes, keyboard operation, responsive layouts, chart interaction, and comprehensible status without color alone. State explicitly whether physical-device touch testing occurred. The API/UI remain private by design; no deployment yet.
 
 ## M6 — Docker and NUC operations
+
+Status: complete. The inspected NUC runs the native AMD64 stack privately through SSH; loopback/database isolation, restart continuity, real backup restoration, schedule installation, and a manual off-host recovery copy were verified. See [evidence and limits](MILESTONE-6.md). No Cloudflare route or host reboot was performed.
 
 Inspect the actual host and existing proxy/access services before proposing changes. Build a production image serving frontend and API, plus isolated PostgreSQL Compose configuration. Add non-root execution, health/readiness checks, restart behavior, resource and log limits, secrets handling, backup/restore, and a release script with backup-before-migration.
 

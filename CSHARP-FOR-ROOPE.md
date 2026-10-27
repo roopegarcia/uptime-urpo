@@ -476,8 +476,34 @@ npm --prefix frontend run build
 
 Explain why a static-file handler must leave API errors as JSON, why TypeScript cannot validate arbitrary JSON by itself, and why a missing HTTP observation cannot become a zero on a graph. Follow [tutorial Part 6](tutorial.md#part-6--build-the-react-dashboard) for the demonstration and [M5 evidence](docs/MILESTONE-5.md) for verification limits.
 
+## Milestone 6 — Hosting, packaging, and recovery
+
+### One assembly can have a small operational CLI path
+
+[Program.cs](backend/UptimeUrpo.Api/Program.cs) matches `args is ["--health-check"]` before building the host. This C# list pattern means exactly one argument with that value. The branch sends a three-second readiness request, sets the process exit code, and returns. It does not start another worker or require database credentials.
+
+Unlike a normal API request handled inside the running host, this probe is a short separate process. Keeping it before host construction avoids duplicate monitoring and provides a health tool without adding curl to the runtime image. A target failure does not fail liveness; a database failure does fail readiness.
+
+### Configuration sources have an order
+
+`UPTIME_CONFIG_FILE` selects a read-only JSON secret. `AddJsonFile` adds it to the configuration chain before environment and CLI overrides. This resembles loading a Node configuration object followed by explicit environment overrides, but ASP.NET Core's configuration providers supply typed options through DI.
+
+The runtime/migration containers mount different secrets. A lifetime or DI registration is not a substitute for this operating-system/database boundary. The runtime role's restricted grants remain enforced by PostgreSQL.
+
+### Portable IL differs from a native launcher
+
+The Docker build publishes framework-dependent managed output with `UseAppHost=false`. The runtime image executes `dotnet UptimeUrpo.Api.dll`. The same managed application can run on the matching ARM64 or AMD64 .NET runtime, without shipping an unused architecture-specific launcher. This preserved the existing portable lockfile during the multi-architecture build.
+
+The SDK/Node builders stay outside the final runtime image. PostgreSQL data stays outside the application image in a named volume. A new deployment can replace code without replacing observations.
+
+### Recovery includes permissions
+
+The restore drill found that default privileges are per database. Restoring as the migration owner was insufficient for runtime reads in a fresh database. The operations helper now establishes per-database defaults, restores with migration ownership, restricts EF history writes again, and verifies runtime access. Correct rows with unusable permissions are not a complete recovery.
+
+Follow [tutorial Part 7](tutorial.md#part-7--deploy-privately-to-the-nuc) and [M6 evidence](docs/MILESTONE-6.md) to demonstrate the image, private access, restart, and restore boundaries. Keep a database replacement distinct from a disposable restore check, and an image rollback distinct from a schema rollback.
+
 ## Future entries
 
-- M6–M7: production configuration, operations, and automated delivery.
+- M7: GitHub Actions validation, explicitly triggered delivery, and recovery exercises.
 
 Add examples and lessons only when introduced. Mark implemented examples with source links and verification commands; keep unimplemented ideas labeled as previews.
