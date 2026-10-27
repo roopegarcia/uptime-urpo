@@ -527,3 +527,5 @@ Follow [tutorial Part 8](tutorial.md#part-8--automate-checks-and-delivery) and [
 - M8, if separately approved: Azure-focused provisioning concepts and infrastructure-as-code.
 
 Add examples and lessons only when introduced. Mark implemented examples with source links and verification commands; keep unimplemented ideas labeled as previews.
+
+M7 delivery lesson: a tool field named `Id` is not automatically a portable identity. The first hosted candidate passed validation but Docker stores reported different image wrapper digests after load. [The identity helper](deploy/image_identity.py) hashes saved config bytes instead; those include runtime settings and layer diff IDs. Three regression tests cover wrapper changes and altered content. This fix still needs its own hosted candidate/promotion evidence.

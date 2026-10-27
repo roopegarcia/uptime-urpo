@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 from release_artifact import digest
+from image_identity import archive_config_digest
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--image',required=True)
@@ -24,7 +25,7 @@ migrations=json.loads(subprocess.check_output(['docker','run','--rm','--network'
 args.output.mkdir(parents=True,exist_ok=True)
 for name,command in [('image.tar',['docker','image','save',args.image]),('source.tar',['git','archive',commit])]:
     with (args.output/name).open('xb') as output:subprocess.run(command,stdout=output,check=True)
-manifest={'schemaVersion':1,'repository':repository,'commit':commit,'runId':run_id,'runAttempt':attempt,'image':args.image,'imageId':info['Id'],'migrations':migrations,
+manifest={'schemaVersion':2,'repository':repository,'commit':commit,'runId':run_id,'runAttempt':attempt,'image':args.image,'imageConfigDigest':archive_config_digest(args.output/'image.tar'),'migrations':migrations,
           'sha256':{name:digest(args.output/name) for name in ['image.tar','source.tar']}}
 (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print('Packaged exact AMD64 image and clean source for '+commit)

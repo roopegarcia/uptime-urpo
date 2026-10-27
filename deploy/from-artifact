@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 from release_artifact import github,validate_download
+from image_identity import image_config_digest
 
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--artifact',type=Path,required=True)
@@ -26,9 +27,9 @@ if subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True):ra
 if subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()!=manifest['commit']:raise SystemExit('Check out the exact candidate commit before delivery')
 with (args.artifact/'image.tar').open('rb') as source:subprocess.run(['docker','image','load'],stdin=source,check=True)
 info=json.loads(subprocess.check_output(['docker','image','inspect',manifest['image']]))[0]
-if info['Id']!=manifest['imageId'] or info['Architecture']!='amd64' or info['Config'].get('Labels',{}).get('org.opencontainers.image.revision')!=manifest['commit']:raise SystemExit('Loaded image identity/source mismatch')
+if image_config_digest(manifest['image'])!=manifest['imageConfigDigest'] or info['Architecture']!='amd64' or info['Config'].get('Labels',{}).get('org.opencontainers.image.revision')!=manifest['commit']:raise SystemExit('Loaded image identity/source mismatch')
 migrations=json.loads(subprocess.check_output(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--entrypoint','dotnet',manifest['image'],'UptimeUrpo.Api.dll','--schema-migrations'],text=True))
 if migrations!=manifest['migrations']:raise SystemExit('Loaded image schema mismatch')
 loader=importlib.machinery.SourceFileLoader('publisher',str(root/'deploy/publish'))
 spec=importlib.util.spec_from_loader(loader.name,loader);publisher=importlib.util.module_from_spec(spec);loader.exec_module(publisher)
-publisher.install_release(args.host,args.directory,args.port,manifest['image'],manifest['commit'],args.artifact/'source.tar',expected_image_id=manifest['imageId'])
+publisher.install_release(args.host,args.directory,args.port,manifest['image'],manifest['commit'],args.artifact/'source.tar',expected_image_digest=manifest['imageConfigDigest'])

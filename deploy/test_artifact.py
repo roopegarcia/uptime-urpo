@@ -21,7 +21,7 @@ class ArtifactTests(unittest.TestCase):
         self.run={'id':42,'event':'workflow_dispatch','path':'.github/workflows/prepare-deployment.yml','head_branch':'main','head_sha':self.commit,'status':'completed','conclusion':'success','run_attempt':1,'repository':{'full_name':'owner/repo'}}
         with (self.directory/'source.tar').open('wb') as output:subprocess.run(['git','archive','HEAD'],cwd=ROOT,stdout=output,check=True)
         (self.directory/'image.tar').write_bytes(b'test image bytes')
-        self.manifest={'schemaVersion':1,'repository':'owner/repo','commit':self.commit,'runId':42,'runAttempt':1,'image':'uptime-urpo:'+self.commit,'imageId':'sha256:'+'1'*64,'migrations':['20261026133756_InitialMonitoring'],
+        self.manifest={'schemaVersion':2,'repository':'owner/repo','commit':self.commit,'runId':42,'runAttempt':1,'image':'uptime-urpo:'+self.commit,'imageConfigDigest':'sha256:'+'1'*64,'migrations':['20261026133756_InitialMonitoring'],
             'sha256':{name:digest(self.directory/name) for name in ['source.tar','image.tar']}}
         self.write_manifest()
 
@@ -74,7 +74,7 @@ class ArtifactTests(unittest.TestCase):
         with zipfile.ZipFile(path,'w') as archive:
             for name in ['manifest.json','image.tar','source.tar']:archive.write(self.directory/name,arcname=name)
         listing={'artifacts':[{'id':1,'name':'deployment-'+self.commit,'expired':False,'digest':'sha256:'+digest(path)}]}
-        self.manifest['imageId']='sha256:'+'2'*64;self.write_manifest()
+        self.manifest['imageConfigDigest']='sha256:'+'2'*64;self.write_manifest()
         with patch('release_artifact.github',return_value=listing):
             with self.assertRaisesRegex(ValueError,'manifest changed'):validate_download(self.directory,self.run,'owner/repo',42)
 

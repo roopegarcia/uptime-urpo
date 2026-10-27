@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 from datetime import datetime, timezone
+from image_identity import image_config_digest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -55,9 +56,9 @@ print("Host/path/loopback-port preflight passed")'''
     remote(host, ['docker', 'info', '--format', '{{.OSType}} {{.Architecture}}'])
 
 
-def install_release(host,base,port,image,release,archive,targets_file=None,expected_image_id=None):
+def install_release(host,base,port,image,release,archive,targets_file=None,expected_image_digest=None):
     preflight_remote(host,base,port)
-    expected_image_id = expected_image_id or subprocess.check_output(['docker','image','inspect','--format','{{.Id}}',image],text=True).strip()
+    expected_image_digest = expected_image_digest or image_config_digest(image)
     destination = base + '/releases/' + release
     prepare = '''import pathlib,sys
 base=pathlib.Path(sys.argv[1]); assert not base.exists() or (base/".uptime-urpo").read_text().strip()=="uptime-urpo-production"; base.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -88,8 +89,8 @@ p=pathlib.Path(sys.argv[1])/"secrets/runtime.json"
 data=json.loads(p.read_text()); data["Monitoring"]=json.load(sys.stdin)
 p.chmod(0o600); p.write_text(json.dumps(data,indent=2)+"\\n"); p.chmod(0o444)'''
             remote(host, ['python3', '-c', configure, state], input=json.dumps(monitoring), text=True)
-        received = remote(host, ['docker','image','inspect','--format','{{.Id}}',image],capture_output=True,text=True).stdout.strip()
-        if received != expected_image_id: raise SystemExit('Transferred image identity mismatch; no migration started.')
+        received = remote(host, ['python3', destination + '/deploy/image_identity.py', image],capture_output=True,text=True).stdout.strip()
+        if received != expected_image_digest: raise SystemExit('Transferred image identity mismatch; no migration started.')
         remote(host, ['python3', destination + '/deploy/ops.py', 'up', '--state', state, '--image', image])
         switch = '''import os,pathlib,sys
 base=pathlib.Path(sys.argv[1]); temp=base/(".current-"+sys.argv[2])

@@ -46,7 +46,7 @@ gh run list --repo roopegarcia/uptime-urpo --workflow prepare-deployment.yml --l
 
 Alternatively use Actions → Prepare private deployment → Run workflow → main. The workflow reuses validation and exercises recovery before uploading a deployment artifact. It does not deploy to the NUC. A push, PR, failed validation, wrong branch, canceled run, or expired artifact cannot be promoted through the artifact command.
 
-The artifact contains source.tar, image.tar, and manifest.json. Source is a clean git archive; the manifest records repository, commit, run/attempt, image ID, migrations, and checksums. The image has the commit label. GitHub's artifact digest protects the downloaded ZIP; internal hashes and source/image identities protect the following steps. [GitHub documents artifact digests](https://github.blog/changelog/2025-03-18-github-actions-now-supports-a-digest-for-validating-your-artifacts-at-runtime/). The tool fails on mismatch rather than treating it as a warning.
+The artifact contains source.tar, image.tar, and manifest.json. Source is a clean git archive; the manifest records repository, commit, run/attempt, image config digest, migrations, and checksums. Manifest schema 2 uses `imageConfigDigest`: the SHA-256 of the saved config bytes, which bind runtime settings and layer diff IDs. Docker `.Id` can identify different wrapper objects across image stores, so it is not used for cross-engine comparison. Schema-1 candidates must be rebuilt through a new preparation run. The image has the commit label. GitHub's artifact digest protects the downloaded ZIP; internal hashes and source/image identities protect the following steps. [GitHub documents artifact digests](https://github.blog/changelog/2025-03-18-github-actions-now-supports-a-digest-for-validating-your-artifacts-at-runtime/). The tool fails on mismatch rather than treating it as a warning.
 
 ## Promote the same image from the Mac
 
@@ -62,7 +62,7 @@ For a browser-downloaded ZIP, add `--archive /absolute/path/to/deployment.zip`. 
 
 Keep prior image/source releases and backups. Seven-day GitHub artifact retention is not a long-term recovery store. Promotion requires the live GitHub run/artifact records to remain available; expired candidates require a fresh preparation. The retained local-image rollback path is independent of artifact download.
 
-Open the deployed UI with the existing SSH tunnel described in [the deployment guide](DEPLOYMENT.md). Verify origin readiness, private port bindings, target observations, and browser behavior separately after promotion. An image ID transferred intact does not by itself prove the running app is ready.
+Open the deployed UI with the existing SSH tunnel described in [the deployment guide](DEPLOYMENT.md). Verify origin readiness, private port bindings, target observations, and browser behavior separately after promotion. An image config digest transferred intact does not by itself prove the running app is ready.
 
 ## Failed release and explicit image rollback
 

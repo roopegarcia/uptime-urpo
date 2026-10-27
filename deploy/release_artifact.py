@@ -42,10 +42,10 @@ def validate_bundle(directory, run, repository, run_id):
     validate_run(run,repository,run_id)
     directory=Path(directory)
     manifest=json.loads((directory/'manifest.json').read_text())
-    if manifest.get('schemaVersion')!=1:raise ValueError('Unsupported manifest')
+    if manifest.get('schemaVersion')!=2:raise ValueError('Unsupported manifest')
     if manifest.get('repository','').lower()!=repository.lower() or manifest.get('commit')!=run['head_sha']:raise ValueError('Artifact source does not match the GitHub run')
     if manifest.get('runId')!=run_id or manifest.get('runAttempt')!=run['run_attempt']:raise ValueError('Artifact belongs to another run/attempt')
-    if manifest.get('image')!='uptime-urpo:'+run['head_sha'] or not re.fullmatch('sha256:[0-9a-f]{64}',manifest.get('imageId','')):raise ValueError('Invalid image identity')
+    if manifest.get('image')!='uptime-urpo:'+run['head_sha'] or not re.fullmatch('sha256:[0-9a-f]{64}',manifest.get('imageConfigDigest','')):raise ValueError('Invalid image identity')
     if not manifest.get('migrations') or not all(re.fullmatch(r'[0-9]{14}_[A-Za-z0-9_]+',item) for item in manifest['migrations']):raise ValueError('Invalid schema metadata')
     for name in ['image.tar','source.tar']:
         expected=manifest.get('sha256',{}).get(name,'')

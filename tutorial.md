@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–7 are complete. Part 8 is implemented with local evidence and pending hosted verification. Part 9 is planned. The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
+Each part corresponds to one milestone. **Parts 1–7 are complete. Part 8 has passed hosted validation and candidate preparation; a delivery portability fix awaits a new candidate. Part 9 is planned. The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Part 7 records the private NUC deployment, operational checks, and recovery limits.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -1141,7 +1141,7 @@ Demonstrate the SSH-forwarded dashboard, then explain the Dockerfile stages, dat
 
 We added GitHub Actions validation, a manually triggered deployment-preparation workflow, exact-artifact delivery from the Mac, guarded image rollback, and an isolated failure/recovery exercise. GitHub receives no NUC credential or production target configuration. The operator chose hosted CI with Mac-side SSH deployment, keeping the private network boundary from Part 7.
 
-The source files and local tests exist; a successful hosted run and artifact promotion still need their own evidence. [The M7 record](docs/MILESTONE-7.md) tracks that distinction. The running NUC image remains the verified M6 release until explicitly promoted.
+Hosted validation and manual preparation passed; the first promotion stopped safely on an image-identity mismatch. A corrected candidate and successful promotion still need their own evidence. [The M7 record](docs/MILESTONE-7.md) tracks that distinction. The running NUC image remains the verified M6 release until explicitly promoted.
 
 ### What you need first
 
@@ -1178,7 +1178,7 @@ GitHub cannot reach the private NUC LAN address. We chose to keep deployment on 
 
 Read [package-release.py](deploy/package-release.py). It requires clean source, a commit-tagged AMD64 image with the matching source label, and GitHub run/attempt metadata. It saves source.tar, image.tar, and manifest.json.
 
-The manifest records the commit, repository, run/attempt, image ID, migrations, and file hashes. No private configuration or database backup is included. The runtime's schema metadata command runs without credentials or network access.
+The manifest records the commit, repository, run/attempt, image config digest, migrations, and file hashes. No private configuration or database backup is included. The runtime's schema metadata command runs without credentials or network access.
 
 GitHub records the uploaded ZIP's SHA-256 digest. A checksum detects changed bytes; matching run/source/image identities establish which candidate those bytes represent. The delivery tool requires both. Nothing here claims trust independent of the repository and GitHub account controlling that run.
 
@@ -1192,7 +1192,7 @@ Read [from-actions](deploy/from-actions), [release_artifact.py](deploy/release_a
 
 The tool verifies the repository, manual event, workflow path, branch, successful conclusion, attempt, and artifact digest. It rejects changed files and unsafe ZIP/source archive paths. It creates a detached worktree at the candidate commit while preserving your current branch. Unexpected edits prevent forced worktree cleanup.
 
-After importing the image locally, it checks its ID, architecture, commit label, and migration list. The shared publisher transports that same image and source over SSH, compares the received image ID, then performs Part 7's locked backup-before-migration/readiness sequence. There is no Mac-side rebuild during promotion.
+After importing the image locally, it checks its config digest, architecture, commit label, and migration list. The shared publisher transports that same image and source over SSH, compares the received image config digest, then performs Part 7's locked backup-before-migration/readiness sequence. There is no Mac-side rebuild during promotion.
 
 CLI artifact download needs authenticated GitHub access. An authenticated browser download can instead be supplied with `--archive`; digest verification still applies. Public metadata can be inspected without a CLI token. [The delivery guide](docs/CI-AND-DELIVERY.md) documents setup and limits.
 
@@ -1228,9 +1228,9 @@ Keep the damaged/current state, restore into a separate database, validate data/
 
 ### Step 8: Report evidence at the correct level
 
-Locally: 199 backend, 25 frontend, and 21 operations/artifact/gate tests pass. Workflow linting, Release/frontend builds, and a real isolated failed-release/rollback/recovery drill pass. A deliberately failing validation command stopped before build; failed-run/artifact inputs were rejected before delivery.
+Locally: 199 backend, 25 frontend, and 24 operations/artifact/gate tests pass. Workflow linting, Release/frontend builds, and a real isolated failed-release/rollback/recovery drill pass. A deliberately failing validation command stopped before build; failed-run/artifact inputs were rejected before delivery.
 
-Still pending in this record: a clean-commit reproduction, hosted Ubuntu runs, actual artifact download/promotion, and any repository rule configuration. See [M7](docs/MILESTONE-7.md) for later evidence. These are distinct from the already deployed M6 baseline.
+Clean-checkout validation, hosted Ubuntu validation, manual preparation, and verified artifact download passed. The first promotion stopped before changing the NUC because Docker stores reported different wrapper IDs. The fix uses the saved config digest; regression tests prove that wrappers can differ while runtime/layer identity stays constant. A corrected hosted candidate and successful promotion remain pending, along with any repository rule configuration. See [M7](docs/MILESTONE-7.md) for later evidence. These are distinct from the already deployed M6 baseline.
 
 ### Teach this part
 

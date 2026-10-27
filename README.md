@@ -14,7 +14,7 @@ ssh -N -L 127.0.0.1:5081:127.0.0.1:8108 roope@nuc
 
 Open **http://127.0.0.1:5081/**. This uses the NUC application; Vite and a local API are unnecessary. The existing SSH alias needs the explicit `roope` account. No public hostname or Cloudflare rule was added. Daily backup scheduling is installed; off-host copies are currently manual.
 
-M7 CI and delivery tooling is implemented and locally verified; hosted GitHub runs and artifact promotion are pending first-push verification. The selected route keeps CI on GitHub and deployment on this Mac over SSH. See [CI and delivery](docs/CI-AND-DELIVERY.md) and [M7 evidence](docs/MILESTONE-7.md). [The roadmap](docs/ROADMAP.md) keeps later work distinct.
+M7 hosted validation and manual candidate preparation passed. The first promotion stopped safely before changing the NUC; a fix for Docker image-identity differences is locally verified and awaits a new candidate. The selected route keeps CI on GitHub and deployment on this Mac over SSH. See [CI and delivery](docs/CI-AND-DELIVERY.md) and [M7 evidence](docs/MILESTONE-7.md). [The roadmap](docs/ROADMAP.md) keeps later work distinct.
 
 ## Application
 
@@ -76,7 +76,7 @@ Local database credentials live in ignored `.local/database.env`; preserve this 
 
 Implemented and locally verified: secure monitoring, durable PostgreSQL results/incidents, retention, availability/coverage, bounded APIs/OpenAPI, the React dashboard, and container/recovery tooling. Deployed and operationally checked: native AMD64 readiness, real target checks, loopback/SSH access, database isolation, graceful restart continuity, backup restoration into a separate database, and an off-host recovery copy. These checks do not establish a long-running production reliability history.
 
-Current verification: 199 backend cases (144 unit, 55 integration), 25 frontend tests, and seven operations tests; production image builds and real container/recovery checks. Physical-device touch, a full host reboot, full main-database replacement, an unattended daily backup, and automatic off-host replication remain unverified or unimplemented as detailed in [M6](docs/MILESTONE-6.md). The API has no built-in authentication; keep its origin private and run one monitoring instance per database.
+Current verification: 199 backend cases (144 unit, 55 integration), 25 frontend tests, and 24 operations/artifact/gate tests; production image builds and real container/recovery checks. Physical-device touch, a full host reboot, full main-database replacement, an unattended daily backup, and automatic off-host replication remain unverified or unimplemented as detailed in [M6](docs/MILESTONE-6.md). The API has no built-in authentication; keep its origin private and run one monitoring instance per database.
 
 A monitor running on the same NUC as its targets cannot independently report NUC power loss, network loss, or its own failure. Missing monitoring data must stay visible as gaps. A successful HTTP response proves only that the configured expectation was met, not that every application feature works. An external observer can complement this project later.
 

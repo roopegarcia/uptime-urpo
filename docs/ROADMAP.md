@@ -1,6 +1,6 @@
 # Milestones and acceptance criteria
 
-Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M6 are complete; M6 is privately deployed with native-host/access/recovery checks. M7 is implemented with local evidence; hosted verification remains pending. M8 is planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27), [M5](MILESTONE-5.md#verification-record--2026-10-27), and [M6](MILESTONE-6.md).
+Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M6 are complete; M6 is privately deployed with native-host/access/recovery checks. M7 hosted validation/preparation passed; a corrected candidate and successful promotion remain pending. M8 is planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27), [M5](MILESTONE-5.md#verification-record--2026-10-27), and [M6](MILESTONE-6.md).
 
 At every milestone:
 
@@ -66,7 +66,7 @@ Acceptance: local image checks pass; after an explicitly authorized deployment, 
 
 ## M7 — CI and delivery reliability
 
-Status: implemented and locally verified; awaiting hosted Actions and artifact-promotion evidence. The operator selected GitHub-hosted CI with an explicitly prepared artifact deployed from the Mac over SSH. No self-hosted runner or NUC credential in GitHub. See [M7](MILESTONE-7.md) and [delivery commands](CI-AND-DELIVERY.md).
+Status: hosted validation and manual preparation passed. A cross-engine image-identity fix is locally verified; a corrected candidate and successful artifact promotion remain pending. The operator selected GitHub-hosted CI with an explicitly prepared artifact deployed from the Mac over SSH. No self-hosted runner or NUC credential in GitHub. See [M7](MILESTONE-7.md) and [delivery commands](CI-AND-DELIVERY.md).
 
 Add GitHub Actions for backend build/tests, disposable PostgreSQL integration tests, frontend checks/build, and reproducible release images. Deployment is explicitly triggered, with appropriate secret handling, required checks, backup-before-migration, and recovery instructions.
 
