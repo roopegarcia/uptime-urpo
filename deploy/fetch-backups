@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Copy database archives AND recovery secrets to private local storage over SSH."""
+import argparse
+from datetime import datetime, timezone
+import os
+from pathlib import Path
+import secrets
+import shlex
+import subprocess
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--host', required=True)
+parser.add_argument('--state', required=True, help='Absolute private state directory on the inspected NUC')
+parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parent.parent / '.local/nuc-backups')
+args = parser.parse_args()
+if args.host.startswith('-'): parser.error('Invalid SSH host')
+state = Path(args.state)
+if not state.is_absolute() or state.name != 'state': parser.error('Expected an absolute application state path')
+os.umask(0o077)
+args.output.mkdir(parents=True, mode=0o700, exist_ok=True)
+path = args.output / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + secrets.token_hex(4) + '.tar')
+command = shlex.join(['tar', '-C', str(state), '-cf', '-', 'settings.json', 'secrets', 'backups'])
+try:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+        subprocess.run(['ssh', '-o', 'BatchMode=yes', '--', args.host, command], stdout=output, check=True)
+except BaseException:
+    path.unlink(missing_ok=True)
+    raise
+print(f'Private recovery copy saved: {path}. Contains credentials; keep it outside Git and shared folders.')

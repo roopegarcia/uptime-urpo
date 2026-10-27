@@ -8,11 +8,33 @@ using UptimeUrpo.Api.Monitoring;
 using UptimeUrpo.Api.Persistence;
 using UptimeUrpo.Api.Endpoints;
 
+// Container readiness probe: no configuration, worker, or second database context starts.
+if (args is ["--health-check"])
+{
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+    try
+    {
+        using var response = await client.GetAsync("http://127.0.0.1:8080/health/ready", HttpCompletionOption.ResponseHeadersRead);
+        Environment.ExitCode = response.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
+    {
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Local settings override committed defaults; environment and CLI values win last.
 builder.Configuration
-    .AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false)
+    .AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+// Compose grants each process only its own read-only configuration secret.
+if (Environment.GetEnvironmentVariable("UPTIME_CONFIG_FILE") is { Length: > 0 } configurationFile)
+{
+    builder.Configuration.AddJsonFile(configurationFile, optional: false, reloadOnChange: false);
+}
+builder.Configuration
     .AddEnvironmentVariables()
     .AddCommandLine(args);
 

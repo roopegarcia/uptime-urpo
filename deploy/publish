@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Build a verified AMD64 release and install only Uptime-Urpo on an inspected SSH host."""
+import argparse
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import tarfile
+from datetime import datetime, timezone
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def run(arguments, **kwargs):
+    return subprocess.run(arguments, check=True, **kwargs)
+
+
+def remote(host, arguments, **kwargs):
+    return run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', host, shlex.join([str(a) for a in arguments])], **kwargs)
+
+
+@contextmanager
+def release_lock(host, base):
+    program = "import fcntl,pathlib,sys; lock=(pathlib.Path(sys.argv[1])/'publish.lock').open('a'); fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB); print('LOCKED',flush=True); sys.stdin.read()"
+    process = subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', host,
+                                shlex.join(['python3','-c',program,base])], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        if process.stdout.readline().strip() != 'LOCKED': raise SystemExit('Another publisher holds the release lock, or SSH failed.')
+        yield
+    finally:
+        process.stdin.close()
+        process.stdout.close()
+        process.wait()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--host', required=True, help='Example: roope@nuc (the alias alone uses a different user)')
+    parser.add_argument('--directory', required=True, help='Inspected absolute application directory under ~/apps')
+    parser.add_argument('--port', type=int, required=True, help='Inspected free loopback port')
+    parser.add_argument('--allow-dirty', action='store_true', help='Explicitly include uncommitted, non-ignored files')
+    parser.add_argument('--targets-file', type=Path, help='Private JSON; only its Monitoring section is transferred')
+    args = parser.parse_args()
+    if not re.fullmatch(r'[A-Za-z0-9_.@-]+', args.host) or args.host.startswith('-'):
+        parser.error('Invalid SSH host')
+    if not 1024 <= args.port <= 65535: parser.error('Invalid unprivileged port')
+    os.chdir(ROOT)
+    os.umask(0o077)
+    changes = subprocess.check_output(['git', 'status', '--porcelain'], text=True)
+    if changes and not args.allow_dirty:
+        raise SystemExit('Commit the verified changes first, or explicitly authorize --allow-dirty. Nothing was uploaded.')
+    sha = subprocess.check_output(['git', 'rev-parse', '--short=12', 'HEAD'], text=True).strip()
+    release = sha + ('-dirty-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') if changes else '')
+    image = 'uptime-urpo:' + release
+    base = args.directory
+    project = 'uptime-urpo-production'
+    preflight = '''import json,pathlib,platform,socket,sys
+base=pathlib.Path(sys.argv[1]); port=int(sys.argv[2]); project=sys.argv[3]
+assert platform.machine()=="x86_64", "Expected the inspected Intel host"
+assert base.is_absolute() and base.name=="uptime-urpo" and base.resolve().is_relative_to(pathlib.Path.home()/"apps"), "Unsafe app directory"
+marker=base/".uptime-urpo"
+assert not base.exists() or (marker.is_file() and marker.read_text().strip()==project), "Existing directory is not owned by this publisher"
+settings=base/"state/settings.json"
+if settings.exists():
+ config=json.loads(settings.read_text()); assert config["project"]==project and config["port"]==port
+else:
+ with socket.socket() as probe: probe.bind(("127.0.0.1",port))
+print("Host/path/loopback-port preflight passed")'''
+    remote(args.host, ['python3', '-c', preflight, base, args.port, project])
+    remote(args.host, ['docker', 'info', '--format', '{{.OSType}} {{.Architecture}}'])
+    dotnet = shutil.which('dotnet') or str(Path.home() / '.dotnet/dotnet')
+    run([dotnet, 'restore', 'Uptime-Urpo.slnx', '--locked-mode'])
+    run([dotnet, 'test', 'Uptime-Urpo.slnx', '--no-restore'])
+    run(['python3', '-m', 'unittest', 'discover', '-s', 'deploy', '-p', 'test_*.py'])
+    for command in ['ci', 'test', 'run build', 'run format:check']:
+        run(['npm', '--prefix', 'frontend', *shlex.split(command)])
+    run(['docker', 'buildx', 'build', '--load', '--platform', 'linux/amd64', '--tag', image, '.'])
+    staging = ROOT / '.local' / 'releases' / release
+    staging.mkdir(parents=True, mode=0o700, exist_ok=True)
+    archive = staging / 'source.tar'
+    if changes:
+        print('Explicit dirty release includes:\n' + changes)
+        files = subprocess.check_output(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard']).decode().split('\0')
+        with tarfile.open(archive, 'w') as output:
+            for name in sorted(set(filter(None, files))):
+                if (ROOT / name).exists(): output.add(ROOT / name, arcname=name, recursive=False)
+    else:
+        with archive.open('wb') as output: run(['git', 'archive', 'HEAD'], stdout=output)
+    if not changes and subprocess.check_output(['git','status','--porcelain'],text=True):
+        raise SystemExit('Checkout changed during build; no files uploaded.')
+    destination = base + '/releases/' + release
+    prepare = '''import pathlib,sys
+base=pathlib.Path(sys.argv[1]); assert not base.exists() or (base/".uptime-urpo").read_text().strip()=="uptime-urpo-production"; base.mkdir(mode=0o700,parents=True,exist_ok=True)
+marker=base/".uptime-urpo"
+if not marker.exists(): marker.write_text("uptime-urpo-production\\n")
+(base/"releases"/sys.argv[2]).mkdir(mode=0o700,parents=True,exist_ok=True)'''
+    remote(args.host, ['python3', '-c', prepare, base, release])
+    with release_lock(args.host, base):
+        with archive.open('rb') as source:
+            remote(args.host, ['tar', '--no-same-owner', '-xf', '-', '-C', destination], stdin=source)
+        # Stream the image to Docker, never through a world-readable remote temporary archive.
+        save = subprocess.Popen(['docker', 'image', 'save', image], stdout=subprocess.PIPE)
+        try: remote(args.host, ['docker', 'image', 'load'], stdin=save.stdout)
+        finally:
+            save.stdout.close()
+            if save.wait() != 0: raise SystemExit('Image transfer failed')
+        state = base + '/state'
+        initialize = '''import pathlib,subprocess,sys
+state=pathlib.Path(sys.argv[1])
+if not state.exists(): subprocess.run(["python3",sys.argv[2],"init","--state",str(state),"--project","uptime-urpo-production","--port",sys.argv[3],"--image",sys.argv[4]],check=True)'''
+        remote(args.host, ['python3', '-c', initialize, state, destination + '/deploy/ops.py', args.port, image])
+        if args.targets_file:
+            monitoring = json.loads(args.targets_file.read_text())['Monitoring']
+            if monitoring.get('Target') and not monitoring.get('Targets'):
+                monitoring['Targets'] = [monitoring.pop('Target')]
+            configure = '''import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])/"secrets/runtime.json"
+data=json.loads(p.read_text()); data["Monitoring"]=json.load(sys.stdin)
+p.chmod(0o600); p.write_text(json.dumps(data,indent=2)+"\\n"); p.chmod(0o444)'''
+            remote(args.host, ['python3', '-c', configure, state], input=json.dumps(monitoring), text=True)
+        remote(args.host, ['python3', destination + '/deploy/ops.py', 'up', '--state', state, '--image', image])
+        switch = '''import os,pathlib,sys
+base=pathlib.Path(sys.argv[1]); temp=base/(".current-"+sys.argv[2])
+if temp.is_symlink(): temp.unlink()
+temp.symlink_to("releases/"+sys.argv[2]); os.replace(temp,base/"current")'''
+        remote(args.host, ['python3', '-c', switch, base, release])
+    print(f'Released {release}; loopback origin 127.0.0.1:{args.port}. Verify access and restore separately.')
+
+
+if __name__ == '__main__':
+    try: main()
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(f'Release stopped (exit {error.returncode}). Inspect the stack; no automatic database rollback occurred.') from None
