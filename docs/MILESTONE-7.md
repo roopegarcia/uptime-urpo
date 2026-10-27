@@ -6,7 +6,7 @@ Status on 2026-10-27: implemented and locally verified; GitHub-hosted execution 
 
 The operator chose **CI on GitHub; deployment from the Mac over existing SSH**. GitHub prepares a candidate; it does not connect to the private LAN. No self-hosted runner, NUC credential, production secret, public hostname, or new network access is introduced.
 
-Repository: [roopegarcia/uptime-urpo](https://github.com/roopegarcia/uptime-urpo). The new repository was empty when inspected, with `master` reported as the initial default. Push this checkout's `main` branch and verify it becomes the default before manually preparing a candidate. No existing remote branch was overwritten and no push was performed by the agent.
+Repository: [roopegarcia/uptime-urpo](https://github.com/roopegarcia/uptime-urpo). The new repository was initially empty with `master` reported as default. The operator pushed main; GitHub now reports main as default. No existing remote branch was overwritten and no push was performed by the agent.
 
 ## Implemented
 
@@ -29,7 +29,11 @@ Repository: [roopegarcia/uptime-urpo](https://github.com/roopegarcia/uptime-urpo
 - Restoring the earlier backup into a separate database produced one check while the live isolated database kept two. The post-backup observation was absent from the restored copy; no live database was overwritten.
 - The drill stopped only its own containers/networks and preserved its private test state/volume. Production, the development database, and unrelated services were not modified.
 
-Clean-checkout validation gates passed. The first AMD64-on-ARM recovery rerun caught and fixed an implicit host-platform choice in the broken-image fixture; it now builds for the candidate image architecture. Pending evidence: the corrected recovery drill from its clean commit, an actual hosted Ubuntu Actions run, uploaded artifact download/verification, and an explicit operator-side promotion. GitHub rules requiring checks before merge are repository settings and have not been claimed configured. See [the CI guide](CI-AND-DELIVERY.md).
+Clean-checkout validation gates passed. The first AMD64-on-ARM recovery rerun caught and fixed an implicit host-platform choice in the broken-image fixture; it now builds for the candidate image architecture. The corrected clean-commit recovery drill also passed using an AMD64 image on the ARM64 Mac. A local real-image packaging/ZIP/source/checksum smoke test passed with explicitly synthetic provider metadata; it is not a GitHub-approved deployment candidate.
+
+Hosted [Validation run 40514986868](https://github.com/roopegarcia/uptime-urpo/actions/runs/40514986868) passed all four Ubuntu jobs at `0ecd46e39e99c07aaa6ffd833b829e5a2bed8bb6`, including image/recovery. GitHub initially did not list the dispatch-only workflow after the empty repository's default changed to main, despite its file existing there; a follow-up touches the explicit manual-event declaration on established main.
+
+Pending evidence: manual candidate preparation, uploaded artifact download/verification, and an explicit operator-side promotion. GitHub rules requiring checks before merge are repository settings and have not been claimed configured. See [the CI guide](CI-AND-DELIVERY.md).
 
 ## Reproduce
 

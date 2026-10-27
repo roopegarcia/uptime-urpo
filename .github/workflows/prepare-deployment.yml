@@ -4,7 +4,7 @@ run-name: Prepare private deployment at ${{ github.sha }}
 # GitHub prepares a candidate; an operator on the Mac performs the SSH deployment.
 # No NUC credentials, production secrets, self-hosted runner or automatic LAN access.
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 permissions:
   contents: read
