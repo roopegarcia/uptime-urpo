@@ -91,3 +91,14 @@ Verified after setup:
 At the end of M0, no application tests, production checks, or physical-device checks had been performed because those artifacts did not exist. No project containers were created. No commit, remote publication, or NUC operation occurred. The user-local SDK was installed and Docker Desktop was running at that point; shell profile files were not edited. These are historical observations, not a claim about the engine's current state.
 
 Milestone 0 was completed before M1 approval. The current milestone status is in [the roadmap](ROADMAP.md); the verification record above remains historical.
+
+## Frontend development (M5)
+
+With the API on loopback port 5080, use a second terminal from the repository root:
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Open http://127.0.0.1:5173/. Node 26.9.0 and npm 12.2.0 were verified; `.nvmrc`, exact dependencies, and the npm lockfile live in `frontend/`. Vite proxies API calls locally. No CORS change is needed. `npm --prefix frontend test` runs frontend checks; `npm --prefix frontend run build` type-checks and builds assets. Restart the backend after building to serve the built dashboard directly at port 5080. See [M5](MILESTONE-5.md) for publishing, synthetic browser scenarios, and verification limits.

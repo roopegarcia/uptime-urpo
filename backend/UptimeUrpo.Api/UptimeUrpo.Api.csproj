@@ -18,4 +18,11 @@
     <!-- Local operator settings must never be bundled into build/publish artifacts. -->
     <Content Update="appsettings.Local.json;appsettings.*.Local.json;appsettings.Development.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../frontend/dist/**/*" Link="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="RequireDashboardBuild" BeforeTargets="ComputeFilesToPublish">
+    <Error Condition="!Exists('../../frontend/dist/index.html')" Text="Build the dashboard first: cd frontend &amp;&amp; npm ci &amp;&amp; npm run build" />
+  </Target>
 </Project>

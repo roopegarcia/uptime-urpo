@@ -441,8 +441,43 @@ Cancellation reaches EF/Npgsql queries and their read transaction. A real Postgr
 
 Follow [tutorial Part 5](tutorial.md#part-5--turn-history-into-a-useful-read-only-api) and [the M4 contract](docs/MILESTONE-4.md).
 
+## Milestone 5 — C# meets the React interface
+
+### Records become a wire contract
+
+Compare [MonitoringResponses.cs](backend/UptimeUrpo.Api/Contracts/MonitoringResponses.cs) with [types.ts](frontend/src/types.ts). `DateTimeOffset` is serialized to a JSON string, nullable `double?` to `number | null`, and explicitly configured health enums to their string values. A TypeScript interface checks the consumer's code but does not validate network JSON at runtime.
+
+The safe DTO boundary means the UI never needs EF entities, target URLs, or connection strings. Changing a C# record can still break the frontend; keep producer contract tests and frontend fixtures aligned when contracts change.
+
+### Middleware can serve files and preserve API behavior
+
+[Program.cs](backend/UptimeUrpo.Api/Program.cs) calls `UseDashboardFiles`. The [extension method](backend/UptimeUrpo.Api/Endpoints/DashboardFiles.cs) adds default-file and static-file middleware, roughly like registering Express static middleware. Extension methods put related setup behind a readable call; they do not require another application assembly.
+
+`PhysicalFileProvider` reads only from the selected asset directory and is disposed on application shutdown. Publish links Vite's built files into `wwwroot`. The API-only local workflow still starts before a frontend build exists, while publish requires built assets. Hash-based browser routes avoid an HTML catch-all that would hide API 404s.
+
+### Precision crosses a runtime boundary
+
+C# `DateTimeOffset` can preserve sub-millisecond precision. JavaScript `Date` keeps milliseconds. [historyAt](frontend/src/api.ts) derives both endpoints from the server snapshot and normalizes both before subtracting the elapsed window. Otherwise a maximum 30-day range could grow by a fraction and fail backend validation.
+
+This is not a reason to loosen validation. It is a reason to agree on precision at the boundary. UTC query bounds and local browser display are separate concerns; daylight-saving changes do not change the 720-hour window.
+
+### Cancellation exists on both sides
+
+C# endpoints propagate a `CancellationToken` to EF/Npgsql. Browser requests use `AbortController` for window changes, timeout, and unmount. Neither side should manufacture a target failure because a user left a page. UI polling reads saved evidence and has a different schedule from the monitoring worker.
+
+### Verify and explain
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend test
+npm --prefix frontend run build
+"$HOME/.dotnet/dotnet" test Uptime-Urpo.slnx --no-restore
+```
+
+Explain why a static-file handler must leave API errors as JSON, why TypeScript cannot validate arbitrary JSON by itself, and why a missing HTTP observation cannot become a zero on a graph. Follow [tutorial Part 6](tutorial.md#part-6--build-the-react-dashboard) for the demonstration and [M5 evidence](docs/MILESTONE-5.md) for verification limits.
+
 ## Future entries
 
-- M5–M7: frontend integration, production configuration, operations, and automated delivery.
+- M6–M7: production configuration, operations, and automated delivery.
 
 Add examples and lessons only when introduced. Mark implemented examples with source links and verification commands; keep unimplemented ideas labeled as previews.

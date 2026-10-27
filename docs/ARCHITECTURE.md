@@ -1,6 +1,6 @@
 # Architecture and decisions
 
-Status: accepted design direction for incremental implementation. M0–M4 are complete. The application implements secure monitoring, PostgreSQL results/snapshots/configuration/incidents, retention, observed availability/coverage, bounded read APIs, liveness/readiness, and OpenAPI. Dashboard and deployment remain **planned**. See [the current M4 contract and evidence](MILESTONE-4.md).
+Status: accepted design direction. M0–M5 are complete: secure monitoring, PostgreSQL persistence/incidents, bounded read APIs, and a React dashboard. Production packaging and deployment remain planned. See [the M5 implementation and evidence](MILESTONE-5.md) and [the M4 API contract](MILESTONE-4.md).
 
 ## System shape
 
@@ -16,7 +16,7 @@ flowchart LR
     App --> Database
 ```
 
-The worker, checker, result processing, API, and static frontend are parts of **one ASP.NET Core process**, not separate services. Production starts with one application container and one PostgreSQL container. Local development uses the .NET process, Vite's development server with an API proxy, and disposable/local PostgreSQL when Milestone 3 introduces it.
+The worker, checker, result processing, API, and static frontend are parts of **one ASP.NET Core process**, not separate services. Production starts with one application container and one PostgreSQL container. Local development uses the .NET process, Vite's development server with an API proxy, and local PostgreSQL; database tests use disposable containers.
 
 Use Minimal APIs, ordinary classes, explicit DTOs, built-in dependency injection, and direct EF Core access. Start with one backend project. Do not add generic repositories, CQRS/MediatR, a separate domain assembly, message queues, Redis, Kubernetes, or distributed locks without a demonstrated need.
 
@@ -61,7 +61,7 @@ The scheduler uses cancellation-aware asynchronous work, bounded concurrency, an
 
 Use `IHttpClientFactory` for managed HTTP clients. A worker is long-lived; each concurrent database operation must use a separate service scope and `DbContext`. Never share a context between parallel checks. Inject time and HTTP boundaries where they make deterministic tests possible, rather than introducing broad abstractions.
 
-M1 originally performed one startup check. M2 now uses one sequential async loop per enabled target with a shared semaphore, and a fixed delay after each attempt completes. The first check is due immediately; startup no longer waits for its response. No missed-run queue exists. Timeouts must be shorter than intervals; interval defaults to 60 seconds and concurrency to three. The single-target M1 configuration is supported alongside a new target list, but conflicting shapes are rejected. Reads never trigger target requests. M3 will make results durable.
+M1 originally performed one startup check. M2 now uses one sequential async loop per enabled target with a shared semaphore, and a fixed delay after each attempt completes. The first check is due immediately; startup no longer waits for its response. No missed-run queue exists. Timeouts must be shorter than intervals; interval defaults to 60 seconds and concurrency to three. The single-target M1 configuration is supported alongside a new target list, but conflicting shapes are rejected. Reads never trigger target requests. M3 made results durable.
 
 ## Health and incidents
 
@@ -166,3 +166,13 @@ Version families were reviewed on 2026-10-25. Resolve exact compatible stable pa
 - [Time-provider-aware delays](https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.delay?view=net-10.0)
 - [EF migration application and separate identities](https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/applying)
 - [Testcontainers PostgreSQL module](https://dotnet.testcontainers.org/modules/postgres/)
+
+## Dashboard integration (M5)
+
+React/TypeScript/Vite lives in `frontend/`. Same-origin GET requests use explicit read contracts. No target URL or credentials enter the UI. Overview polls every 30 seconds; history and incidents every 60 seconds. Each resource cancels obsolete work, bounds request duration, pauses when hidden, and preserves prior data with explicit error/staleness labels. Multiple tabs still share the API limits.
+
+Hash routes keep client navigation at `/`; ASP.NET Core serves default/static files without an HTML catch-all. Vite proxies development API calls to the existing loopback listener. Frontend build assets are included under `wwwroot` on publish; the .NET publish target requires an existing frontend build. Local native runs can serve `frontend/dist` after backend restart. This prepares same-origin delivery without introducing deployment infrastructure early.
+
+The SVG chart uses the API's buckets directly. It splits lines at null HTTP timing, preserves missing/disabled buckets, and exposes a keyboard range input and semantic table. It performs no uptime recalculation or client-side gap filling. Statistics use the server's availability/coverage values. History bounds derive from the server snapshot and normalize both timestamps to JavaScript millisecond precision.
+
+Browser times are local with zone labels; query windows remain elapsed UTC hours. Incidents show elapsed sampled-incident time with gap uncertainty. Themes use CSS variables and best-effort local storage. Synthetic browser fixtures are isolated in a development-only server and never imported by the app entry point.

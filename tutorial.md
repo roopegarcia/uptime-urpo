@@ -2,7 +2,7 @@
 
 Uptime-Urpo is a C#/.NET learning project: a private uptime monitor for websites owned by its operator. This tutorial follows the project as it is built, explaining what changed, why it changed, and how to verify it.
 
-Each part corresponds to one milestone. **Parts 1–5 are complete. Parts 6–9 are planned.** The application now exposes history, observed availability/coverage, incidents, and OpenAPI over its persistent monitoring backend. Earlier parts record those stages; Part 5 explains the current read API. The React dashboard is still the next milestone.
+Each part corresponds to one milestone. **Parts 1–6 are complete. Parts 7–9 are planned.** The monitoring backend now has a React dashboard. Earlier parts record earlier stages; Part 5 teaches the read API, and Part 6 connects it to a real interface. Deployment remains a later, separately approved step.
 
 Use this tutorial for the step-by-step story. Use [C# for Roope](CSHARP-FOR-ROOPE.md) for language explanations, [the architecture](docs/ARCHITECTURE.md) for decisions, and [the roadmap](docs/ROADMAP.md) for acceptance criteria.
 
@@ -859,9 +859,153 @@ See [the M4 contract and evidence](docs/MILESTONE-4.md). **Next is Part 6: the R
 
 ## Part 6 — Build the React dashboard
 
-**Milestone 5 · Planned; not built**
+**Milestone 5 · Complete and locally verified**
 
-Connect React and TypeScript to the C# API. Explain loading/error states, accessible status indicators, interactive charts with gaps, incident duration, responsive layout, and themes. Record browser and physical-device checks separately.
+### What we built
+
+A private React dashboard now presents the C# application's monitoring data. The overview shows overall health, individual service statuses, response time, observed availability, and coverage. You can search services, filter those needing attention, and select 24 hours, seven days, or 30 days.
+
+A service detail page adds response history, a keyboard-inspectable chart, its data table, open incident elapsed time, and paginated incident history. Both light and dark themes work, and the layout adapts to small screens. Loading, no services, missing observations, failed requests, and stale snapshots all have explicit views.
+
+We did not add administration, registration, URL submission, another monitor, or a deployment. The UI reads the API; it never performs target checks itself.
+
+### What you need first
+
+Parts 1–5, a running development database/API, and Node/npm. This milestone was verified with Node 26.9.0 and npm 12.2.0; `frontend/.nvmrc` records the Node version. The frontend dependencies are exact versions with a committed package lock.
+
+From the repository root, start the API if it is not already running:
+
+```sh
+python3 scripts/dev-db.py up
+python3 scripts/dev-db.py run
+```
+
+In another terminal:
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Open **http://127.0.0.1:5173/**. The development API remains on port 5080. You do not need to run two monitors or duplicate the database.
+
+### Step 1: Follow data across the language boundary
+
+Read [the C# response records](backend/UptimeUrpo.Api/Contracts/MonitoringResponses.cs), then [the TypeScript interfaces](frontend/src/types.ts). C# uses `DateTimeOffset` for timestamps, but JSON carries strings. C# `double?` becomes `number | null`, so no observations can remain “no percentage.” Health is an explicit union of the four string values.
+
+```ts
+export type Health = 'UP' | 'DOWN' | 'DEGRADED' | 'UNKNOWN';
+```
+
+The browser does not receive EF entities, connection strings, or target URLs. It receives the safe DTOs we designed in Part 5. TypeScript checks code during compilation; a cast from JSON does not validate an arbitrary server response at runtime. Our API contract tests cover the producer, and the frontend rejects HTTP failures and non-JSON fallback pages.
+
+**Teach it:** Trace `ObservedAvailabilityPercent` from C# through camelCase JSON to `observedAvailabilityPercent` in TypeScript, then show `percent(null)` displaying a dash instead of inventing 0% or 100%.
+
+### Step 2: Connect development without adding CORS
+
+[Vite configuration](frontend/vite.config.ts) proxies `/api` and `/health` to the existing loopback API. The browser sees requests to its own origin, `127.0.0.1:5173`.
+
+[api.ts](frontend/src/api.ts) uses relative URLs such as `/api/overview`. Production can serve the same JavaScript next to the API without replacing a hard-coded backend hostname. `getJson` checks HTTP status and JSON content type before parsing; safe messages explain 404, 429, and 503 without exposing raw server exceptions.
+
+This separation is useful in any full-stack project: build tools serve the interface during development, while the application owns the data contract.
+
+### Step 3: Model loading as real state
+
+Read [useResource](frontend/src/hooks.ts). It keeps `data`, `loading`, `error`, and receipt time separately. Those fields permit several useful combinations:
+
+- Loading with no data: show a loading state.
+- Data with no error: show the successful snapshot.
+- Error with no data: explain that data could not be loaded and allow retry.
+- Error with old data: keep useful evidence, but label it as old.
+
+A failed refresh must not leave a green “current” banner. The overview becomes “Waiting for fresh signals,” uses neutral styling, and labels badges and accessible link names as last known. An older-than-90-second snapshot is also flagged. Server UNKNOWN still has its own target-freshness meaning.
+
+`AbortController` is the browser counterpart to propagating a C# `CancellationToken`: cancel requests when a component goes away, its window changes, or ten seconds expire. The hook has a busy guard so polls do not overlap. It pauses while the tab is hidden and refreshes when it becomes visible.
+
+Overview polls every 30 seconds; chart and first-page incidents every 60 seconds. This is UI polling of saved evidence, not the monitoring schedule. Multiple tabs still share the backend request limit, so 429 remains a real handled state.
+
+**Demonstrate a failure safely:** use the isolated harness in Step 8 instead of stopping a real target or changing the database.
+
+### Step 4: Build views from small components
+
+Read [App.tsx](frontend/src/App.tsx). `OverviewPanel`, `ServiceDetails`, `Metric`, `Status`, and `IncidentList` each present a specific piece of the contract. React state holds UI choices such as search text, time window, theme, and loaded incident pages; it does not recreate the monitoring state machine.
+
+`#/services/{id}` provides simple client navigation. A browser reload still requests `/`, and Back/Forward changes the selected service. A route change focuses the page heading. The skip link focuses the main content without accidentally changing the service route.
+
+Window controls use real buttons with `aria-pressed`. Statuses have words as well as color. Theme state starts from the saved choice or system preference, and storage failures do not disable the control. [CSS variables](frontend/src/styles.css) define both themes without duplicating the layout.
+
+### Step 5: Draw evidence without filling the gaps
+
+Read [ResponseChart.tsx](frontend/src/ResponseChart.tsx), starting with `responseSegments`. A null average ends a line segment; the next HTTP timing starts a new one. Never draw a straight connection across an interval where nothing was observed.
+
+The chart maps actual UTC bucket boundaries onto its horizontal axis. It shows missing observations and monitoring-disabled periods separately. Failed checks have a distinct strip, including failures with no HTTP response. A DNS failure is not a zero-millisecond response.
+
+Hover or click/touch selects a bucket. The native range input gives keyboard users Home/End and arrow-key inspection. The selected bucket lists its start/end, average, min/max, completed checks, and failures. The expandable semantic table exposes every bucket without requiring someone to interpret SVG.
+
+We used a small SVG implementation because the API already bounds and aggregates the data to at most 1,000 points. No chart library or interpolation layer was necessary for this graph.
+
+There was a subtle integration bug worth teaching: .NET timestamps may contain more than three fractional-second digits, while JavaScript `Date` retains milliseconds. Keeping the original `to` but rounding `from` could request 30 days plus a fraction, which the API correctly rejects. `historyAt` normalizes **both** bounds and uses the server snapshot time so browser clock skew cannot request future history.
+
+### Step 6: Present incidents without overstating certainty
+
+The open-incident banner shows elapsed time since the first tracked failure and displays its later confirmation timestamp. It advances between requests. Closed incident duration remains fixed. Neither is an exact measurement of continuous downtime, and an incident containing monitoring gaps says so explicitly.
+
+`IncidentList` sends `nextBeforeId` as `beforeId` to load older incidents. It merges pages by ID and keeps already loaded older rows when current incidents refresh. A chart-window change does not discard incident pages or keyboard focus. If a page request fails, the existing rows stay visible and the same cursor can be retried.
+
+**Explain it to someone else:** “Health describes the latest signal; an incident records a confirmed failure episode; availability describes successful samples; coverage describes missing evidence.”
+
+### Step 7: Serve the built interface from ASP.NET Core
+
+```sh
+npm --prefix frontend run build
+"$HOME/.dotnet/dotnet" publish backend/UptimeUrpo.Api -c Release --no-restore -o .local/m5-publish
+```
+
+Vite creates `frontend/dist`. [The backend project](backend/UptimeUrpo.Api/UptimeUrpo.Api.csproj) includes these assets under `wwwroot` on publish and fails clearly if the frontend build is missing. Always rebuild before a release; the presence check cannot detect an outdated build.
+
+[DashboardFiles](backend/UptimeUrpo.Api/Endpoints/DashboardFiles.cs) uses default/static-file middleware. Native development can serve `frontend/dist` after the API restarts. Published output serves `wwwroot`. There is no HTML catch-all, so `/api/not-a-route` still returns a 404 Problem Details response.
+
+You can keep using Vite with the current API process. To try the built UI at `http://127.0.0.1:5080/`, build it, stop the existing API with Ctrl+C in its terminal, and start it again with `python3 scripts/dev-db.py run`. This is a local run, not a deployment. Node is a build dependency; ASP.NET Core serves the resulting files.
+
+### Step 8: Verify behavior and teach with controlled examples
+
+```sh
+npm --prefix frontend test
+npm --prefix frontend run build
+npm --prefix frontend run format:check
+"$HOME/.dotnet/dotnet" test Uptime-Urpo.slnx --no-restore
+```
+
+The milestone has 25 frontend tests and 199 backend cases. [Component tests](frontend/src/App.test.tsx) exercise filtering, stale refresh recovery, empty/error states, theme storage failure, incidents/cursors, gaps, table access, focus, and routing. [Hook tests](frontend/src/hooks.test.tsx) verify cancellation, timeout, no overlapping request, hidden tabs, and obsolete requests. The C# static-file test proves that adding UI serving preserves API errors and liveness.
+
+For a repeatable teaching demonstration with **synthetic data only**:
+
+```sh
+npm --prefix frontend run build
+npm --prefix frontend run test:preview
+```
+
+Visit `http://127.0.0.1:5181/?scenario=signals`. It includes all health states and an incident with gaps. Open Test API, inspect chart buckets with the keyboard, and load the older recovered incident. Other scenarios are `empty`, `error`, `stale` (press Refresh), `missing`, and `loading`. Restart the harness to reset stale-scenario counters. Stop it with Ctrl+C afterward.
+
+The harness does not connect to PostgreSQL or check real targets. Its fixtures are not imported into the application bundle. This lets you teach failures without creating false operational evidence.
+
+Chrome verification used real local API data and synthetic browser scenarios, both themes, keyboard/pointer chart controls, and viewport widths 320/390/768/1440. Physical-device touch, Safari/Firefox, and a screen-reader session remain unverified. Read [the M5 evidence and limitations](docs/MILESTONE-5.md) before making portfolio claims.
+
+### Teach this part
+
+Give a five-minute demonstration: show overview → open service → explain availability versus coverage → inspect a missing bucket → open its table → explain incident confirmation and gaps → switch theme → show a failed refresh in the harness.
+
+Ask your audience:
+
+1. Does UI polling run another target check? **No. It reads persisted/cached observations.**
+2. Can TypeScript guarantee arbitrary JSON matches an interface? **No. Types disappear at runtime; contracts need validation/testing at boundaries.**
+3. Why keep availability and coverage separate? **Successful observed checks say nothing about missing observations.**
+4. Why split the SVG line? **Connecting across null timings implies evidence we do not have.**
+5. Why preserve old data after a refresh fails? **It is useful history, as long as its age and uncertainty are clear.**
+6. Why normalize both query timestamps? **Different fractional precision can accidentally exceed a bounded date range.**
+7. What proves physical touch support? **Testing the actual device; a narrow desktop viewport is not enough.**
+
+**What remains:** M6 production images and NUC/private-access inspection, M7 delivery automation, and optional M8 Azure. Stop for the next milestone approval before that work.
 
 ## Part 7 — Deploy privately to the NUC
 

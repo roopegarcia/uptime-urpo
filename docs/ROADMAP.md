@@ -1,6 +1,6 @@
 # Milestones and acceptance criteria
 
-Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M4 are complete and locally verified; M5–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), and [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27).
+Work one milestone at a time. Approval of the roadmap is not permission to bypass the approval gate between milestones. M0–M5 are complete and locally verified; M6–M8 are planned. See the dated records for [M0](LOCAL-DEVELOPMENT.md#milestone-0-verification-record--2026-10-25), [M1](MILESTONE-1.md#verification-record--2026-10-25), [M2](MILESTONE-2.md#verification-record--2026-10-25), [M3](MILESTONE-3.md#verification-record--2026-10-26), [M4](MILESTONE-4.md#test-and-verification-record--2026-10-27), and [M5](MILESTONE-5.md#verification-record--2026-10-27).
 
 At every milestone:
 
@@ -49,6 +49,8 @@ Complete the read-only endpoints, durable incident transitions, observed availab
 Acceptance: unit/database/API tests cover first failure through DOWN and recovery, one open incident, atomic result/state writes, gaps and stale results, disabled/configuration periods, window edges, no observations, slow successes, pagination, invalid ranges/IDs, and sanitized errors. API reads never cause target requests.
 
 ## M5 — React dashboard
+
+Status: complete. The dashboard uses the real API, renders gaps faithfully, supports themes and keyboard/pointer chart inspection, and has automated frontend checks plus Chrome viewport verification. Physical-device touch is unverified. See [implementation and evidence](MILESTONE-5.md).
 
 Verify/pin React, TypeScript, Vite, and supported Node tooling; add frontend checks and lockfiles. Build a five-second overview, detail/history charts, recent incidents, current incident duration, themes, and responsive accessible controls. Use a small chart dependency only if it materially helps hover, touch, keyboard access, and gaps.
 

@@ -191,6 +191,37 @@ public sealed class ApiTests
         Assert.Equal(0, factory.Handler.Calls);
     }
 
+    [Fact]
+    public async Task DashboardFilesShareTheOriginWithoutSwallowingApiErrors()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "urpo-dashboard-" + Guid.NewGuid());
+        Directory.CreateDirectory(Path.Combine(directory, "wwwroot", "assets"));
+        await File.WriteAllTextAsync(Path.Combine(directory, "wwwroot", "index.html"), "<!doctype html><title>Dashboard fixture</title>");
+        await File.WriteAllTextAsync(Path.Combine(directory, "wwwroot", "assets", "app.js"), "console.log('fixture');");
+        try
+        {
+            using var factory = new ApiFactory(enabled: false);
+            using var configured = factory.WithWebHostBuilder(builder => builder.UseContentRoot(directory));
+            using var client = configured.CreateClient();
+            using var index = await client.GetAsync("/");
+            Assert.Equal(HttpStatusCode.OK, index.StatusCode);
+            Assert.Equal("text/html", index.Content.Headers.ContentType?.MediaType);
+            Assert.Contains("Dashboard fixture", await index.Content.ReadAsStringAsync());
+            Assert.Equal("no-cache", index.Headers.CacheControl?.ToString());
+            Assert.Equal("nosniff", index.Headers.GetValues("X-Content-Type-Options").Single());
+            using var asset = await client.GetAsync("/assets/app.js");
+            Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
+            Assert.Equal("text/javascript", asset.Content.Headers.ContentType?.MediaType);
+            Assert.Equal("{\"status\":\"ok\"}", await client.GetStringAsync("/health"));
+            using var missing = await client.GetAsync("/api/not-a-route");
+            Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+            Assert.Equal("application/problem+json", missing.Content.Headers.ContentType?.MediaType);
+            using var missingAsset = await client.GetAsync("/assets/missing.js");
+            Assert.Equal(HttpStatusCode.NotFound, missingAsset.StatusCode);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     private static async Task<string?> HealthAsync(HttpClient client)
     {
         using var json = JsonDocument.Parse(await client.GetStringAsync("/api/services/test-service"));

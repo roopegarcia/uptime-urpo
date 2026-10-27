@@ -100,6 +100,7 @@ if (builder.Configuration.GetValue<bool>("migrate"))
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseRateLimiter();
+app.UseDashboardFiles();
 app.MapOpenApi();
 app.MapMonitoringQueries();
 
