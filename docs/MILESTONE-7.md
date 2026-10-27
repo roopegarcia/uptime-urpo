@@ -29,7 +29,7 @@ Repository: [roopegarcia/uptime-urpo](https://github.com/roopegarcia/uptime-urpo
 - Restoring the earlier backup into a separate database produced one check while the live isolated database kept two. The post-backup observation was absent from the restored copy; no live database was overwritten.
 - The drill stopped only its own containers/networks and preserved its private test state/volume. Production, the development database, and unrelated services were not modified.
 
-Pending evidence: the same gates from a clean committed checkout, an actual hosted Ubuntu Actions run, uploaded artifact download/verification, and an explicit operator-side promotion. GitHub rules requiring checks before merge are repository settings and have not been claimed configured. See [the CI guide](CI-AND-DELIVERY.md).
+Clean-checkout validation gates passed. The first AMD64-on-ARM recovery rerun caught and fixed an implicit host-platform choice in the broken-image fixture; it now builds for the candidate image architecture. Pending evidence: the corrected recovery drill from its clean commit, an actual hosted Ubuntu Actions run, uploaded artifact download/verification, and an explicit operator-side promotion. GitHub rules requiring checks before merge are repository settings and have not been claimed configured. See [the CI guide](CI-AND-DELIVERY.md).
 
 ## Reproduce
 

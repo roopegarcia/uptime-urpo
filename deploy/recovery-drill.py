@@ -32,7 +32,8 @@ try:
         before=stack.counts('uptime_urpo')
         with tempfile.TemporaryDirectory() as context:
             Path(context,'Dockerfile').write_text('FROM '+args.image+'\nENTRYPOINT ["dotnet","UptimeUrpo.Api.dll","--Monitoring:MaxConcurrency=0"]\n')
-            subprocess.run(['docker','build','-t',broken,context],check=True)
+            info=json.loads(subprocess.check_output(['docker','image','inspect',args.image]))[0]
+            subprocess.run(['docker','build','--platform',info['Os']+'/'+info['Architecture'],'-t',broken,context],check=True)
         candidate=Stack(state,broken)
         try:
             candidate.release()
